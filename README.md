@@ -37,6 +37,22 @@ The goal is to automate the collection and comparison of broadband plans from co
 4. Store in SQLite / CSV
 
 
+## Project Structure
+
+The project is designed to be simple and modular for Phase 1.
+
+- `api/` – Collect data via APIs (primary source)
+- `scraper/` – Fallback data collection using web scraping
+- `storage/` – Database connection and data operations (SQLite)
+- `export/` – Export structured data from SQLite to CSV
+- `data/` – Stores the database file
+
+
+## Data Flow
+
+API → (fallback: scraper) → processing → database → CSV export
+
+
 ## Key Focus
 - Data accuracy and reliability
 - Lightweight and cost-free solution
