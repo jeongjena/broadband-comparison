@@ -77,11 +77,9 @@ def extract_contract_term_months(feature):
         if "$" in lower:
             continue
 
-        print(lower)
         match = re.search(r"(\d+)\s*month term only", lower)
 
         if match:
-            print("Matched!!")
             return int(match.group(1))
     return None
 
