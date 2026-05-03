@@ -1,6 +1,9 @@
 import requests
+import re
+from datetime import datetime
+from processing.standardizer import standardize_plans
 
-# NOTE: API KEY IS HARDCODED FOR PROOF OF CONCEPT PURPOSES ONLY. IN PRODUCTION, THIS SHOULD BE SECURELY MANAGED.
+# NOTE: API KEY IS HARDCODED FOR PROOF OF CONCEPT PURPOSES ONLY.
 API_KEY = "j4ukhbwyZPr6w7KVEd5k1KpfzW2Y6dI5dpOnstca"
 
 plans_url = "https://api.contact-digital-prod.net/plans?journey=Join&type=RESI"
@@ -13,7 +16,6 @@ common_headers = {
     "user-agent": "Mozilla/5.0",
     "x-api-key": API_KEY
 }
-
 
 def fetch_contact_plans():
     session = requests.Session()
@@ -60,19 +62,22 @@ def fetch_contact_plans():
 
     return all_plans, []
 
+def extract_speed(value):
+    if not value:
+        return None
+    match = re.search(r"\d+", value)
+    return int(match.group()) if match else None
 
 def clean_contact_plans(plans, _):
     cleaned_plans = []
+    seen = set() # to track duplicates based on (plan name, speed)
 
     for item in plans:
         price_str = item.get("BundlePrice", "")
         price = float(price_str.replace("$", "").replace("/mth", "")) if price_str else None
 
-        down_str = item.get("DownloadSpeed", "")
-        up_str = item.get("UploadSpeed", "")
-
-        down = int(down_str.replace("Avg. ", "")) if down_str else None
-        up = int(up_str.replace("Avg. ", "")) if up_str else None
+        down = extract_speed(item.get("DownloadSpeed", ""))
+        up = extract_speed(item.get("UploadSpeed", ""))
 
         features = " | ".join(
             filter(
@@ -85,6 +90,12 @@ def clean_contact_plans(plans, _):
             )
         )
 
+        key = (item.get("Name"), down)
+
+        if key in seen:
+            continue
+        seen.add(key)
+
         cleaned_plan = {
             "title": item.get("Name"),
             "serviceType": item.get("Type"),
@@ -92,7 +103,11 @@ def clean_contact_plans(plans, _):
             "dataEntitlement": item.get("DataCapDesc"),
             "downSpeed": down,
             "upSpeed": up,
-            "features": features
+            "features": features,
+            "promotionText": item.get("Label"),  
+            "contractTermMonths": None,
+            "landlineAllowed": None,
+            "antennaRequired": item.get("Type") == "FixedWireless"
         }
 
         cleaned_plans.append(cleaned_plan)
@@ -102,4 +117,29 @@ def clean_contact_plans(plans, _):
 
 def get_contact_plans():
     plans, _ = fetch_contact_plans()
-    return clean_contact_plans(plans, _)
+    cleaned = clean_contact_plans(plans, _)
+
+    standardized = []
+
+    for plan in cleaned:
+        standardized.append(
+            standardize_plans(
+                provider="Contact",
+                plan_name=plan.get("title"),
+                connection_type=plan.get("serviceType"),
+                original_price=plan.get("rrp"),
+                data_allowance=plan.get("dataEntitlement"),
+                speed_down_mbps=plan.get("downSpeed"),
+                speed_up_mbps=plan.get("upSpeed"),
+                feature=plan.get("features"),
+                promotion_text=plan.get("promotionText"),
+                contract_term_months=plan.get("contractTermMonths"),
+                landline_allowed=plan.get("landlineAllowed"),
+                antenna_required=plan.get("antennaRequired"),
+                data_source="API",
+                source_url="https://www.contact.co.nz/broadband",
+                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        )
+    
+    return standardized

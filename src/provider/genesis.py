@@ -1,4 +1,7 @@
+import re
 import requests
+from datetime import datetime
+from processing.standardizer import standardize_plans
 
 url = "https://api.2degrees.nz/sales/v3/catalog/products?businessGroup=genesis&salesChannel=OnlineSignup"
 
@@ -19,6 +22,7 @@ def fetch_genesis_plans():
     for service in data.get("coreServices", []):
         for product in service.get("coreProducts", []):
             for component in product.get("coreProductComponents", []):
+                # only keep internet plans
                 if component.get("coreProductComponentService") != "Internet":
                     continue
                 
@@ -30,8 +34,28 @@ def fetch_genesis_plans():
 
     return all_plans, []
 
+def extract_promotion_text(features):
+    if not features:
+        return None
+
+    parts = features.lower().split("|")
+    keywords = ["off", "free", "discount", "offer", "promo"]
+
+    matches = [p.strip() for p in parts if any(k in p for k in keywords)]
+
+    return " | ".join(matches) if matches else None
+
+def extract_contract_term(features):
+    if not features:
+        return None
+
+    match = re.search(r"(\d+)\s*month", features.lower())
+    return int(match.group(1)) if match else None
+
+
 def clean_genesis_plans(plans, _):
     cleaned_plans = []
+    seen = set() # to track duplicates based on (plan name, speed)
 
     for item in plans:
         product = item.get("product", {})
@@ -53,14 +77,27 @@ def clean_genesis_plans(plans, _):
         charges = plan.get("charges", [])
         price = charges[0].get("chargeIncludingGst") if charges else None
 
+        key = (
+            plan.get("planDescription"),
+            speeds.get("averageSpeedDownMbps")
+        )
+
+        if key in seen:
+            continue
+        seen.add(key)
+
         cleaned_plan = {
             "title": plan.get("planDescription"),
             "serviceType": plan.get("serviceType"),
             "rrp": price,
-            "dataEntitlement": plan.get("dataCap"),
+            "dataEntitlement": plan.get("dataCap") or "Unlimited",
             "downSpeed": speeds.get("averageSpeedDownMbps"),
             "upSpeed": speeds.get("averageSpeedUpMbps"),
-            "features": features
+            "features": features,
+            "promotionText": extract_promotion_text(features),
+            "contractTermMonths": extract_contract_term(features),
+            "landlineAllowed": None,  # not provided by API
+            "antennaRequired": None   # not provided by API
         }
 
         cleaned_plans.append(cleaned_plan)
@@ -69,5 +106,28 @@ def clean_genesis_plans(plans, _):
 
 def get_genesis_plans():
     plans, _ = fetch_genesis_plans()
-    cleaned_data = clean_genesis_plans(plans, _)
-    return cleaned_data
+    cleaned = clean_genesis_plans(plans, _)
+
+    standardized = [] 
+
+    for plan in cleaned:
+        standardized.append(
+            standardize_plans(
+                provider="Genesis",
+                plan_name=plan.get("title"),
+                connection_type=plan.get("serviceType"),
+                original_price=plan.get("rrp"),
+                data_allowance=plan.get("dataEntitlement"),
+                speed_down_mbps=plan.get("downSpeed"),
+                speed_up_mbps=plan.get("upSpeed"),
+                feature=plan.get("features"),
+                promotion_text=plan.get("promotionText"),
+                contract_term_months=plan.get("contractTermMonths"),
+                landline_allowed=plan.get("landlineAllowed"),
+                antenna_required=plan.get("antennaRequired"),
+                data_source="API",
+                source_url="https://www.genesisenergy.co.nz/broadband",
+                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        )
+    return standardized
