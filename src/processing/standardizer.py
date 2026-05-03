@@ -1,8 +1,3 @@
-# src/processing/standardizer.py
-
-import re
-
-
 def clean_text(text):
     if text is None:
         return None
@@ -14,81 +9,6 @@ def clean_text(text):
         .replace("^", "")
         .strip()
     )
-
-
-def extract_promotion_text(feature):
-    if not feature:
-        return None
-
-    parts = [clean_text(part) for part in feature.split("|")]
-
-    promotion_keywords = [
-        "off",
-        "free",
-        "discount",
-        "exclusive",
-        "prime video",
-        "sale",
-        "subject to availability"
-    ]
-
-    matched_parts = []
-
-    for part in parts:
-        if part is None:
-            continue
-
-        lower = part.lower()
-
-        if any(keyword in lower for keyword in promotion_keywords):
-            matched_parts.append(part)
-
-    return " | ".join(matched_parts) if matched_parts else None
-
-
-def extract_contract_term_months(feature):
-    if not feature:
-        return None
-
-    lower = feature.lower()
-    
-    if "$" in lower:
-        return None
-
-    match = re.search(r"(\d+)\s*month term", lower)
-
-    if match:
-        return int(match.group(1))
-
-    return None
-
-
-def extract_landline_allowed(feature):
-    if not feature:
-        return None
-
-    lower = feature.lower()
-
-    if "home phone line can be added" in lower:
-        return True
-
-    return None
-
-
-def extract_antenna_required(feature):
-    if not feature:
-        return None
-
-    lower = feature.lower()
-
-    if "no installation required" in lower:
-        return False
-
-    if "antenna required" in lower:
-        return True
-
-    return None
-
 
 def standardize_plans(
     provider=None,
@@ -109,20 +29,6 @@ def standardize_plans(
     source_url=None,
     collected_at=None
 ):
-    cleaned_feature = clean_text(feature)
-
-    if promotion_text is None:
-        promotion_text = extract_promotion_text(cleaned_feature)
-
-    if contract_term_months is None:
-        contract_term_months = extract_contract_term_months(cleaned_feature)
-
-    if landline_allowed is None:
-        landline_allowed = extract_landline_allowed(cleaned_feature)
-
-    if antenna_required is None:
-        antenna_required = extract_antenna_required(cleaned_feature)
-
     return {
         "provider": provider,
         "plan_name": plan_name,

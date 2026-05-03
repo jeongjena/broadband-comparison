@@ -6,6 +6,7 @@ import re
 
 import requests
 from bs4 import BeautifulSoup
+from processing.standardizer import standardize_plans
 
 
 # Skinny broadband page URL
@@ -376,7 +377,33 @@ def get_skinny_plans():
 
         print(f"[INFO] Skinny extracted {len(cleaned_data)} rows.")
 
-        return cleaned_data
+        standardized_plans = []
+
+        for plan in cleaned_data:
+            standardized_plans.append(
+                standardize_plans(
+                    provider="Skinny",
+                    plan_name=plan.get("title"),
+                    connection_type=plan.get("serviceType"),
+                    monthly_price=plan.get("monthlyPrice"),
+                    original_price=plan.get("rrp"),
+                    promotion_text=plan.get("promotionText"),
+                    data_allowance=plan.get("dataEntitlement"),
+                    speed_down_mbps=plan.get("downSpeed"),
+                    speed_up_mbps=plan.get("upSpeed"),
+                    feature=plan.get("features"),
+                    contract_term_months=plan.get("contractTermMonths"),
+                    landline_allowed=plan.get("landlineAllowed"),
+                    antenna_required=plan.get("antennaRequired"),
+                    queried_address=plan.get("queriedAddress"),
+                    data_source=plan.get("dataSource") or "STATIC_HTML",
+                    source_url=plan.get("sourceUrl") or "https://www.skinny.co.nz/broadband",
+                    collected_at=plan.get("collectedAt") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            )
+
+        return standardized_plans
+
 
     except Exception as e:
         print(f"[ERROR] Skinny failed: {e}")
