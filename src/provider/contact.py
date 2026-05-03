@@ -1,5 +1,6 @@
 import requests
 
+# NOTE: API KEY IS HARDCODED FOR PROOF OF CONCEPT PURPOSES ONLY. IN PRODUCTION, THIS SHOULD BE SECURELY MANAGED.
 API_KEY = "j4ukhbwyZPr6w7KVEd5k1KpfzW2Y6dI5dpOnstca"
 
 plans_url = "https://api.contact-digital-prod.net/plans?journey=Join&type=RESI"
