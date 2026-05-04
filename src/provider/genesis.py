@@ -93,7 +93,6 @@ def clean_genesis_plans(plans, _):
             "dataEntitlement": plan.get("dataCap") or "Unlimited",
             "downSpeed": speeds.get("averageSpeedDownMbps"),
             "upSpeed": speeds.get("averageSpeedUpMbps"),
-            "features": features,
             "promotionText": extract_promotion_text(features),
             "contractTermMonths": extract_contract_term(features),
             "landlineAllowed": None,  # not provided by API
@@ -120,7 +119,6 @@ def get_genesis_plans():
                 data_allowance=plan.get("dataEntitlement"),
                 speed_down_mbps=plan.get("downSpeed"),
                 speed_up_mbps=plan.get("upSpeed"),
-                feature=plan.get("features"),
                 promotion_text=plan.get("promotionText"),
                 contract_term_months=plan.get("contractTermMonths"),
                 landline_allowed=plan.get("landlineAllowed"),
