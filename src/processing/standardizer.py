@@ -20,7 +20,6 @@ def standardize_plans(
     data_allowance=None,
     speed_down_mbps=None,
     speed_up_mbps=None,
-    feature=None,
     contract_term_months=None,
     landline_allowed=None,
     antenna_required=None,

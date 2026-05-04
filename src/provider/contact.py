@@ -78,18 +78,6 @@ def clean_contact_plans(plans, _):
 
         down = extract_speed(item.get("DownloadSpeed", ""))
         up = extract_speed(item.get("UploadSpeed", ""))
-
-        features = " | ".join(
-            filter(
-                None,
-                [
-                    item.get("Type"),
-                    item.get("DataCapDesc"),
-                    item.get("Label")
-                ]
-            )
-        )
-
         key = (item.get("Name"), down)
 
         if key in seen:
@@ -103,7 +91,6 @@ def clean_contact_plans(plans, _):
             "dataEntitlement": item.get("DataCapDesc"),
             "downSpeed": down,
             "upSpeed": up,
-            "features": features,
             "promotionText": item.get("Label"),  
             "contractTermMonths": None,
             "landlineAllowed": None,
@@ -131,7 +118,6 @@ def get_contact_plans():
                 data_allowance=plan.get("dataEntitlement"),
                 speed_down_mbps=plan.get("downSpeed"),
                 speed_up_mbps=plan.get("upSpeed"),
-                feature=plan.get("features"),
                 promotion_text=plan.get("promotionText"),
                 contract_term_months=plan.get("contractTermMonths"),
                 landline_allowed=plan.get("landlineAllowed"),

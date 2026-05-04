@@ -391,7 +391,6 @@ def get_skinny_plans():
                     data_allowance=plan.get("dataEntitlement"),
                     speed_down_mbps=plan.get("downSpeed"),
                     speed_up_mbps=plan.get("upSpeed"),
-                    feature=plan.get("features"),
                     contract_term_months=plan.get("contractTermMonths"),
                     landline_allowed=plan.get("landlineAllowed"),
                     antenna_required=plan.get("antennaRequired"),
