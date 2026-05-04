@@ -3,12 +3,20 @@ from provider.twodegrees import get_twodegrees_plans
 from provider.skinny import get_skinny_plans
 from provider.mercury import get_mercury_plans
 from processing.standardizer import standardize_plans
+from provider.contact import get_contact_plans
+from provider.genesis import get_genesis_plans
+
 
 def main():
     standardized_twodegrees_plans = get_twodegrees_plans()
     standardized_skinny_plans = get_skinny_plans()  
+
     standardized_mercury_plans = get_mercury_plans()
     
+
+    contact_plans = get_contact_plans()
+    genesis_plans = get_genesis_plans()
+
     print("2Degrees Plan: \n")
     for plan in standardized_twodegrees_plans:
         print(plan)
@@ -24,6 +32,16 @@ def main():
     for plan in standardized_mercury_plans:
         print(plan)
         print("\n")    
+
+    print("Contact Plan:\n")
+    for plan in contact_plans:
+        print(plan)
+        print("\n")
+
+    print("Genesis Plan:\n")
+    for plan in genesis_plans:
+        print(plan)
+        print("\n")
 
 if __name__ == "__main__":
     main()
