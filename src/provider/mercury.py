@@ -64,34 +64,43 @@ def extract_promotion_text(text):
         return None
 
     promotion_keywords = [
-        "half-price",
-        "free router",
         "free",
         "reward",
-        "rewards",
-        "bundle",
-        "offer",
         "save",
+        "bundle",
         "discount",
-        "samsung",
+        "offer",
+        "router",
+        "postage",
+        "handling",
     ]
 
+    # Forced sentence splitting
+    text = text.replace(" All ", ". All ")
+    text = text.replace(" Rewards ", ". Rewards ")
+
     parts = re.split(r"\.|\n|\|", text)
-    matched_parts = []
+
+    cleaned = []
 
     for part in parts:
-        cleaned_part = clean_text(part)
+        part_clean = clean_text(part)
 
-        if not cleaned_part:
+        if not part_clean:
             continue
 
-        lower = cleaned_part.lower()
+        lower = part_clean.lower()
 
-        if any(keyword in lower for keyword in promotion_keywords):
-            matched_parts.append(cleaned_part)
+        if "offer summaries" in lower:
+            continue
 
-    return " | ".join(matched_parts) if matched_parts else None
+        if any(k in lower for k in promotion_keywords):
+            cleaned.append(part_clean)
 
+    # deduplication
+    cleaned = list(dict.fromkeys(cleaned))
+
+    return " | ".join(cleaned) if cleaned else None
 
 def extract_feature_text(text):
     if not text:
@@ -120,7 +129,9 @@ def extract_feature_text(text):
             continue
 
         lower = cleaned_part.lower()
-
+        if "offer summaries" in lower:
+            continue
+    
         if not any(keyword in lower for keyword in promotion_keywords):
             feature_parts.append(cleaned_part)
 
