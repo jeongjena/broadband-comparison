@@ -5,7 +5,7 @@ from provider.mercury import get_mercury_plans
 from processing.standardizer import standardize_plans
 from provider.contact import get_contact_plans
 from provider.genesis import get_genesis_plans
-
+from provider.zeronet import get_zeronet_plans
 
 def main():
     standardized_twodegrees_plans = get_twodegrees_plans()
@@ -16,6 +16,7 @@ def main():
 
     contact_plans = get_contact_plans()
     genesis_plans = get_genesis_plans()
+    zeronet_plans = get_zeronet_plans()
 
     print("2Degrees Plan: \n")
     for plan in standardized_twodegrees_plans:
@@ -40,6 +41,11 @@ def main():
 
     print("Genesis Plan:\n")
     for plan in genesis_plans:
+        print(plan)
+        print("\n")
+
+    print("Zeronet Plan:\n")
+    for plan in zeronet_plans:
         print(plan)
         print("\n")
 
