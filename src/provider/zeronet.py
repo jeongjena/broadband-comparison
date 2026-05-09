@@ -104,6 +104,9 @@ def extract_speed(text):
 def clean_zeronet_plans(all_html):
     cleaned_plans = []
 
+    # prevent duplicate plans
+    seen = set()
+
     for page in all_html:
         contract_term = page.get("contractTermMonths")
 
@@ -165,45 +168,57 @@ def clean_zeronet_plans(all_html):
                 "antennaRequired": False
             }
 
+            # deduplicate by plan + contract type
+            key = (
+                cleaned_plan["title"],
+                cleaned_plan["contractTermMonths"]
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
             cleaned_plans.append(cleaned_plan)
+
+    print(f"[INFO] Zeronet extracted {len(cleaned_plans)} rows.")
 
     return cleaned_plans
 
 
 def get_zeronet_plans():
-    all_html = fetch_zeronet_plans()
+    try:
+        all_html = fetch_zeronet_plans()
 
-    cleaned = clean_zeronet_plans(all_html)
+        cleaned = clean_zeronet_plans(all_html)
 
-    standardized = []
+        standardized = []
 
-    for plan in cleaned:
-        standardized.append(
-            standardize_plans(
-                provider="Zeronet",
-                plan_name=plan.get("title"),
-                connection_type=plan.get("serviceType"),
-                monthly_price=plan.get("monthlyPrice"),
-                original_price=plan.get("rrp"),
-                promotion_text=plan.get("promotionText"),
-                data_allowance=plan.get("dataEntitlement"),
-                speed_down_mbps=plan.get("downSpeed"),
-                speed_up_mbps=plan.get("upSpeed"),
-                contract_term_months=plan.get("contractTermMonths"),
-                landline_allowed=plan.get("landlineAllowed"),
-                antenna_required=plan.get("antennaRequired"),
-                data_source="SELENIUM",
-                source_url=URL,
-                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for plan in cleaned:
+            standardized.append(
+                standardize_plans(
+                    provider="Zeronet",
+                    plan_name=plan.get("title"),
+                    connection_type=plan.get("serviceType"),
+                    monthly_price=plan.get("monthlyPrice"),
+                    original_price=plan.get("rrp"),
+                    promotion_text=plan.get("promotionText"),
+                    data_allowance=plan.get("dataEntitlement"),
+                    speed_down_mbps=plan.get("downSpeed"),
+                    speed_up_mbps=plan.get("upSpeed"),
+                    contract_term_months=plan.get("contractTermMonths"),
+                    landline_allowed=plan.get("landlineAllowed"),
+                    antenna_required=plan.get("antennaRequired"),
+                    data_source="SELENIUM",
+                    source_url=URL,
+                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
             )
-        )
 
-    return standardized
+        return standardized
+
+    except Exception as e:
+        print(f"[ERROR] Zeronet failed: {e}")
+        return []
 
 
-if __name__ == "__main__":
-    plans = get_zeronet_plans()
-
-    for plan in plans:
-        print(plan)
-        print("\n")
