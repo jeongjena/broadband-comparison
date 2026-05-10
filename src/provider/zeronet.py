@@ -24,61 +24,96 @@ def fetch_zeronet_plans():
     options = webdriver.ChromeOptions()
 
     # run browser in headless mode
+    # headless mode is chrome runs without opening a visble browser window. 
+    # This is useful for web scraping as it can be faster and use less resources than running a full browser.
     options.add_argument("--headless=new")
 
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
         options=options
     )
+    try:
+        driver.get(URL)
 
-    driver.get(URL)
-
-    # wait until plan cards appear
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located(
-            (By.CLASS_NAME, "plan-card")
+        # wait until plan cards appear
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.CLASS_NAME, "plan-card")
+            )
         )
-    )
 
-    all_html = []
+        all_html = []
+        
+        # scrape default 12 month plans
+        all_html.append({
+            "contractTermMonths": 12,
+            "html": driver.page_source
+        })
 
-    # scrape default 12 month plans
-    all_html.append({
-        "contractTermMonths": 12,
-        "html": driver.page_source
-    })
-
-    # click no-term tab
-    no_term_button = driver.find_element(
-        By.CSS_SELECTOR,
-        'label[for="switch-term-No-term"]'
-    )
-
-    driver.execute_script(
-        "arguments[0].click();",
-        no_term_button
-    )
-
-    # wait for updated plans to render
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located(
-            (By.CLASS_NAME, "plan-card")
+        # click no-term tab
+        no_term_button = driver.find_element(
+            By.CSS_SELECTOR,
+            'label[for="switch-term-No-term"]'
         )
-    )
 
-    # scrape no-term plans
-    all_html.append({
-        "contractTermMonths": None,
-        "html": driver.page_source
-    })
+        driver.execute_script(
+            "arguments[0].click();",
+            no_term_button
+        )
 
-    RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
-    RAW_PATH.write_text(driver.page_source, encoding="utf-8")
+        # wait for updated plans to render
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.CLASS_NAME, "plan-card")
+            )
+        )
 
-    driver.quit()
+        # scrape no-term plans
+        all_html.append({
+            "contractTermMonths": None,
+            "html": driver.page_source
+        })
 
-    return all_html
+        # locate hyperfibre button
+        hyperfibre_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//button[contains(., 'Hyperfibre')]"
+                )
+            )
+        )
 
+        driver.execute_script(
+            "arguments[0].scrollIntoView();",
+            hyperfibre_button
+        )
+
+        driver.execute_script(
+            "arguments[0].click();",
+            hyperfibre_button
+        )
+
+        # wait for plans to update
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.CLASS_NAME, "plan-card")
+            )
+        )
+
+        # scrape hyperfibre plans
+        all_html.append({
+            "contractTermMonths": None,
+            "html": driver.page_source
+        })
+
+        RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        RAW_PATH.write_text(driver.page_source, encoding="utf-8")
+
+        return all_html
+    
+    finally: 
+        driver.quit()
 
 def extract_price_number(text):
     if not text:
@@ -148,12 +183,20 @@ def clean_zeronet_plans(all_html):
                 if details else None
             )
 
+            plan_title = clean_text(
+                title.get_text(strip=True)
+                if title else None
+            )
+
+            connection_type = (
+                "Hyperfibre"
+                if "Hyperfibre" in plan_title
+                else "Fibre"
+            )
+
             cleaned_plan = {
-                "title": clean_text(
-                    title.get_text(strip=True)
-                    if title else None
-                ),
-                "serviceType": "Fibre",
+                "title": plan_title,
+                "serviceType": connection_type,
                 "monthlyPrice": monthly_price,
                 "rrp": extract_price_number(
                     old_price.get_text(strip=True)
