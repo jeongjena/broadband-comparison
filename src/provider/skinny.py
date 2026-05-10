@@ -6,14 +6,9 @@ import re
 
 import requests
 from bs4 import BeautifulSoup
-<<<<<<< Updated upstream
-=======
 from processing.standardizer import clean_text, standardize_plans
->>>>>>> Stashed changes
-
 
 URL = "https://www.skinny.co.nz/broadband"
-
 RAW_DIR = Path("data/raw")
 RAW_PATH = RAW_DIR / "skinny.html"
 
@@ -367,10 +362,7 @@ def get_skinny_plans():
         cleaned_data = clean_skinny_plans(html)
 
         print(f"[INFO] Skinny extracted {len(cleaned_data)} rows.")
-
-<<<<<<< Updated upstream
-        return cleaned_data
-=======
+        
         standardized_plans = []
 
         for plan in cleaned_data:
@@ -385,7 +377,7 @@ def get_skinny_plans():
                     data_allowance=plan.get("dataEntitlement"),
                     speed_down_mbps=plan.get("downSpeed"),
                     speed_up_mbps=plan.get("upSpeed"),
-                    feature=plan.get("features"),
+                   
                     contract_term_months=plan.get("contractTermMonths"),
                     landline_allowed=plan.get("landlineAllowed"),
                     antenna_required=plan.get("antennaRequired"),
@@ -397,7 +389,7 @@ def get_skinny_plans():
             )
 
         return standardized_plans
->>>>>>> Stashed changes
+
 
     except Exception as e:
         print(f"[ERROR] Skinny failed: {e}")
