@@ -6,20 +6,29 @@ from processing.standardizer import standardize_plans
 from provider.contact import get_contact_plans
 from provider.genesis import get_genesis_plans
 from provider.zeronet import get_zeronet_plans
+from provider.one import get_one_plans
+from provider.sky import get_sky_plans
 
 def main():
     standardized_twodegrees_plans = get_twodegrees_plans()
-    standardized_skinny_plans = get_skinny_plans()  
-
+    standardized_one_plans = get_one_plans()
     standardized_mercury_plans = get_mercury_plans()
-    
-
     contact_plans = get_contact_plans()
     genesis_plans = get_genesis_plans()
     zeronet_plans = get_zeronet_plans()
+    standardized_skinny_plans = get_skinny_plans()  
+    standardized_sky_plans = get_sky_plans()
 
-    print("2Degrees Plan: \n")
+
+
+
+    print("2degrees Plan: \n")
     for plan in standardized_twodegrees_plans:
+        print(plan)
+        print("\n")
+
+    print("One Plan: \n")
+    for plan in standardized_one_plans:
         print(plan)
         print("\n")
 
@@ -43,11 +52,17 @@ def main():
     for plan in genesis_plans:
         print(plan)
         print("\n")
-
+    
+    print("Sky Plans:\n")
+    for plan in standardized_sky_plans:
+        print(plan)
+        print("\n")
+        
     print("Zeronet Plan:\n")
     for plan in zeronet_plans:
         print(plan)
         print("\n")
 
+        
 if __name__ == "__main__":
     main()

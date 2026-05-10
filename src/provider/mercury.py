@@ -75,12 +75,10 @@ def extract_promotion_text(text):
         "handling",
     ]
 
-    # Forced sentence splitting
     text = text.replace(" All ", ". All ")
     text = text.replace(" Rewards ", ". Rewards ")
 
     parts = re.split(r"\.|\n|\|", text)
-
     cleaned = []
 
     for part in parts:
@@ -97,30 +95,43 @@ def extract_promotion_text(text):
         if any(k in lower for k in promotion_keywords):
             cleaned.append(part_clean)
 
-    # deduplication
     cleaned = list(dict.fromkeys(cleaned))
 
     return " | ".join(cleaned) if cleaned else None
 
-def extract_feature_text(text):
+
+def extract_contract_term_months(text):
     if not text:
         return None
 
-    promotion_keywords = [
-        "half-price",
-        "free router",
-        "free",
-        "reward",
-        "rewards",
+    lower = text.lower()
+
+    if "no fixed term" in lower or "open term" in lower or "no term" in lower:
+        return 0
+
+    match = re.search(r"(\d+)\s*month", lower)
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def extract_bundle_text(text):
+    if not text:
+        return None
+
+    bundle_keywords = [
         "bundle",
-        "offer",
-        "save",
-        "discount",
-        "samsung",
+        "power",
+        "energy",
+        "electricity",
+        "gas",
+        "mobile",
     ]
 
     parts = re.split(r"\.|\n|\|", text)
-    feature_parts = []
+    matched = []
 
     for part in parts:
         cleaned_part = clean_text(part)
@@ -129,13 +140,16 @@ def extract_feature_text(text):
             continue
 
         lower = cleaned_part.lower()
+
         if "offer summaries" in lower:
             continue
-    
-        if not any(keyword in lower for keyword in promotion_keywords):
-            feature_parts.append(cleaned_part)
 
-    return " | ".join(feature_parts) if feature_parts else None
+        if any(keyword in lower for keyword in bundle_keywords):
+            matched.append(cleaned_part)
+
+    matched = list(dict.fromkeys(matched))
+
+    return " | ".join(matched) if matched else None
 
 
 def infer_plan_name(monthly_price, feature_text):
@@ -165,7 +179,7 @@ def infer_plan_name(monthly_price, feature_text):
 def infer_connection_type(feature_text):
     lower = feature_text.lower() if feature_text else ""
 
-    if "wireless" in lower or "router rental" in lower:
+    if "wireless" in lower or "120gb" in lower or "300gb" in lower or "1000gb" in lower:
         return "Wireless"
 
     return "Fibre"
@@ -202,7 +216,7 @@ def clean_mercury_plans(html):
 
     cleaned_plans = []
 
-    for index, card in enumerate(cards, start=1):
+    for card in cards:
         price_element = card.select_one(".mercury-content-tile__title")
         intro_element = card.select_one(".mercury-content-tile__intro")
 
@@ -228,7 +242,8 @@ def clean_mercury_plans(html):
         data_allowance = infer_data_allowance(plan_name, connection_type, raw_feature_text)
 
         promotion_text = extract_promotion_text(raw_feature_text)
-        feature_text = extract_feature_text(raw_feature_text)
+        contract_term_months = extract_contract_term_months(raw_feature_text)
+        bundle_text = extract_bundle_text(raw_feature_text)
 
         cleaned_plans.append({
             "title": plan_name,
@@ -236,14 +251,14 @@ def clean_mercury_plans(html):
             "monthlyPrice": monthly_price,
             "rrp": None,
             "promotionText": promotion_text,
+            "bundle": bundle_text,
             "dataEntitlement": data_allowance,
             "downSpeed": speed_down,
             "upSpeed": speed_up,
-            "contractTermMonths": None,
+            "contractTermMonths": contract_term_months,
             "landlineAllowed": None,
             "antennaRequired": False if connection_type == "Fibre" else None,
             "queriedAddress": None,
-            "features": feature_text,
             "dataSource": "STATIC_HTML",
             "sourceUrl": URL,
             "collectedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -270,10 +285,10 @@ def get_mercury_plans():
                     monthly_price=plan.get("monthlyPrice"),
                     original_price=plan.get("rrp"),
                     promotion_text=plan.get("promotionText"),
+                    #bundle=plan.get("bundle"),
                     data_allowance=plan.get("dataEntitlement"),
                     speed_down_mbps=plan.get("downSpeed"),
                     speed_up_mbps=plan.get("upSpeed"),
-                    feature=plan.get("features"),
                     contract_term_months=plan.get("contractTermMonths"),
                     landline_allowed=plan.get("landlineAllowed"),
                     antenna_required=plan.get("antennaRequired"),
