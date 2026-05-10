@@ -1,3 +1,5 @@
+from bs4 import BeautifulSoup
+
 def clean_text(text):
     if text is None:
         return None
@@ -9,6 +11,24 @@ def clean_text(text):
         .replace("^", "")
         .strip()
     )
+
+def extract_list_items(html):
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    return [li.get_text(strip=True) for li in soup.find_all("li")]
+
+def extract_paragraphs(html):
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with(" - ")
+
+    return [
+        p.get_text(strip=True)
+        for p in soup.find_all("p")
+    ]
 
 def standardize_plans(
     provider=None,
