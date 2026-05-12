@@ -8,6 +8,7 @@ from provider.genesis import get_genesis_plans
 from provider.zeronet import get_zeronet_plans
 from provider.one import get_one_plans
 from provider.sky import get_sky_plans
+from provider.spark import get_spark_plans
 
 def main():
     standardized_twodegrees_plans = get_twodegrees_plans()
@@ -18,7 +19,7 @@ def main():
     zeronet_plans = get_zeronet_plans()
     standardized_skinny_plans = get_skinny_plans()  
     standardized_sky_plans = get_sky_plans()
-
+    standardized_spark_plans = get_spark_plans()
 
 
 
@@ -32,13 +33,17 @@ def main():
         print(plan)
         print("\n")
 
+    print("Spark Plan: \n")
+    for plan in standardized_spark_plans:
+        print(plan)
+        print("\n")
+
     print("Skinny Plan: \n")
     for plan in standardized_skinny_plans:
         print(plan)
         print("\n")
         
     print("Mercury Plan: \n")
-
     for plan in standardized_mercury_plans:
         print(plan)
         print("\n")    
