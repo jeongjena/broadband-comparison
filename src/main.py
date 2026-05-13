@@ -9,6 +9,8 @@ from provider.zeronet import get_zeronet_plans
 from provider.one import get_one_plans
 from provider.sky import get_sky_plans
 from provider.spark import get_spark_plans
+from provider.electrickiwi import get_electrickiwi_plans
+from provider.wirelessnation import get_wirelessnation_plans
 
 def main():
     standardized_twodegrees_plans = get_twodegrees_plans()
@@ -20,7 +22,8 @@ def main():
     standardized_skinny_plans = get_skinny_plans()  
     standardized_sky_plans = get_sky_plans()
     standardized_spark_plans = get_spark_plans()
-
+    electrickiwi_plans = get_electrickiwi_plans()
+    wirelessnation_plans = get_wirelessnation_plans()
 
 
     print("2degrees Plan: \n")
@@ -65,6 +68,16 @@ def main():
         
     print("Zeronet Plan:\n")
     for plan in zeronet_plans:
+        print(plan)
+        print("\n")
+    
+    print("Electric Kiwi Plans:\n")
+    for plan in electrickiwi_plans:
+        print(plan)
+        print("\n")
+
+    print("Wireless Nation Plans:\n")
+    for plan in wirelessnation_plans:
         print(plan)
         print("\n")
 
