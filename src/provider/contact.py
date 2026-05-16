@@ -74,7 +74,12 @@ def clean_contact_plans(plans, _):
 
     for item in plans:
         price_str = item.get("BundlePrice", "")
-        price = float(price_str.replace("$", "").replace("/mth", "")) if price_str else None
+        #price = float(price_str.replace("$", "").replace("/mth", "")) if price_str else None
+
+        monthly_price = (
+            float(price_str.replace("$", "").replace("/mth", ""))
+            if price_str else None
+        )
 
         down = extract_speed(item.get("DownloadSpeed", ""))
         up = extract_speed(item.get("UploadSpeed", ""))
@@ -86,12 +91,17 @@ def clean_contact_plans(plans, _):
 
         cleaned_plan = {
             "title": item.get("Name"),
-            "serviceType": item.get("Type"),
-            "rrp": price,
+            "serviceType": (
+                "Wireless"
+                if item.get("Type") == "FixedWireless" 
+                else item.get("Type")
+            ),
+            "monthlyPrice": monthly_price,
+            "rrp": None,
             "dataEntitlement": item.get("DataCapDesc"),
             "downSpeed": down,
             "upSpeed": up,
-            "promotionText": item.get("Label"),  
+            "promotionText": item.get("Label") or None,  
             "contractTermMonths": None,
             "landlineAllowed": None,
             "antennaRequired": item.get("Type") == "FixedWireless"
@@ -114,6 +124,7 @@ def get_contact_plans():
                 provider="Contact",
                 plan_name=plan.get("title"),
                 connection_type=plan.get("serviceType"),
+                monthly_price=plan.get("monthlyPrice"),
                 original_price=plan.get("rrp"),
                 data_allowance=plan.get("dataEntitlement"),
                 speed_down_mbps=plan.get("downSpeed"),
