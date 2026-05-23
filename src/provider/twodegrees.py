@@ -1,11 +1,12 @@
 import requests
-import json
 import re
 from datetime import datetime
+
 from processing.standardizer import clean_text
 from processing.standardizer import standardize_plans
 
-url = "https://api.2degrees.nz/sales/v3/catalog/broadbandPlanCards"
+
+BASE_URL = "https://api.2degrees.nz/sales/v3/catalog"
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -14,66 +15,98 @@ headers = {
     "user-agent": "Mozilla/5.0"
 }
 
-params_fixed = {
-    "businessGroup": "2degrees",
-    "salesChannel": "OnlineSignup",
-    "productType": "broadband"
-}
 
-params_wireless = {
-    "businessGroup": "2degrees",
-    "salesChannel": "OnlineSignup",
-    "productType": "wireless"
-}
+def fetch_data():
+    fixed = requests.get(
+        f"{BASE_URL}/broadbandPlanCards",
+        headers=headers,
+        params={
+            "businessGroup": "2degrees",
+            "salesChannel": "OnlineSignup",
+            "productType": "broadband"
+        }
+    ).json()
 
-def fetch_twodegrees_plans():
-    # fixed line call
-    res_fixed = requests.get(url, headers=headers, params=params_fixed)
-    fixed_cards = res_fixed.json()
+    wireless = requests.get(
+        f"{BASE_URL}/broadbandPlanCards",
+        headers=headers,
+        params={
+            "businessGroup": "2degrees",
+            "salesChannel": "OnlineSignup",
+            "productType": "wireless"
+        }
+    ).json()
 
-    # wireless call
-    res_wireless = requests.get(url, headers=headers, params=params_wireless)
-    wireless_cards = res_wireless.json()
-    return (fixed_cards, wireless_cards)
+    offers = requests.get(
+        f"{BASE_URL}/offers/v2",
+        headers=headers,
+        params={
+            "businessGroup": "2degrees",
+            "salesChannel": "OnlineSignup"
+        }
+    ).json()
 
-def extract_promotion_text(feature):
+    return fixed, wireless, offers
+
+
+def extract_offer_text(offer):
+    descriptions = offer.get("additionalData", {}).get("descriptions", [])
+
+    priority = [
+        "stackerDescription",
+        "broadbandContractFixed",
+        "stackerTitle",
+        "pricingDescription"
+    ]
+
+    for description_type in priority:
+        for description in descriptions:
+            if description.get("type") != description_type:
+                continue
+
+            text = description.get("text", [])
+            if not text:
+                continue
+
+            return clean_text(" ".join(text))
+
+    return None
+
+
+def extract_base_promo(feature):
     if not feature:
         return None
 
-    parts = [clean_text(part) for part in feature.split("|")]
+    parts = [clean_text(p) for p in feature.split("|")]
 
-    promotion_keywords = [
-        "off",
-        "free",
-        "discount",
-        "exclusive",
-        "prime video",
-        "sale",
-        "subject to availability"
-    ]
+    keywords = ["off", "free", "discount", "prime video", "sale"]
 
-    matched_parts = []
+    promos = []
 
     for part in parts:
-        if part is None:
+        if not part:
             continue
 
         lower = part.lower()
 
-        if any(keyword in lower for keyword in promotion_keywords):
-            matched_parts.append(part)
+        if any(keyword in lower for keyword in keywords):
+            promos.append(part)
 
-    return " | ".join(matched_parts) if matched_parts else None
+    return " | ".join(promos) if promos else None
 
 
 def extract_contract_term_months(feature):
     if not feature:
         return None
 
-    parts = [clean_text(part) for part in feature.split("|")]
+    parts = [clean_text(p) for p in feature.split("|")]
 
     for part in parts:
+        if not part:
+            continue
+
         lower = part.lower()
+
         if "$" in lower:
             continue
 
@@ -81,16 +114,17 @@ def extract_contract_term_months(feature):
 
         if match:
             return int(match.group(1))
+
     return None
 
 
-def extract_landline_allowed(feature):
-    if not feature:
+def extract_landline_allowed(features):
+    if not features:
         return None
 
-    lower = feature.lower()
+    features_text = " ".join(features).lower()
 
-    if "home phone line can be added" in lower:
+    if "home phone line can be added" in features_text:
         return True
 
     return None
@@ -110,59 +144,180 @@ def extract_antenna_required(feature):
 
     return None
 
-def clean_twodegrees_plans(fixed_cards, wireless_cards):
-    cleaned_plans = []
 
-    for item in fixed_cards + wireless_cards:
-        feature = " | ".join(
-            filter(
-                None,
-                [
-                    item.get("discountMessage"),
-                    *item.get("features", []),
-                    item.get("topHatText"),
-                    item.get("disclaimer")
-                ]
-            )
-        )
-        cleaned_feature = clean_text(feature)
+def fibre_offer_applies(plan, offer):
+    plan_id = plan.get("id", "")
 
-        cleaned_plan = {
-            "title": item.get("title"),
-            "serviceType": item.get("serviceType"),
-            "rrp": item.get("rrp"),
-            "dataEntitlement": item.get("dataEntitlement"),
-            "downSpeed": item.get("downSpeed"),
-            "upSpeed": item.get("upSpeed"),
-            "promotionText": extract_promotion_text(cleaned_feature),
-            "contractTermMonth": extract_contract_term_months(cleaned_feature),
-            "landlineRequired": extract_landline_allowed(cleaned_feature),
-            "antennaRequired": extract_antenna_required(cleaned_feature)
-        }
-        cleaned_plans.append(cleaned_plan)
-    return cleaned_plans
+    for qualification in offer.get("offerQualifications", []):
+        if qualification.get("serviceGroup") == "AllBroadband":
+            return True
+
+        for service in qualification.get("serviceGroupServices", []):
+            service_type = service.get("serviceType")
+            if not service_type:
+                continue
+
+            if service_type.replace("-", "/") in plan_id:
+                return True
+
+    return False
+
+
+def wireless_offer_applies(plan, offer):
+    plan_id = plan.get("id")
+    core_products = plan.get("coreProducts", [])
+
+    for qualification in offer.get("offerQualifications", []):
+        if qualification.get("serviceGroup") == "AllBroadband":
+            return True
+
+        for service in qualification.get("serviceGroupServices", []):
+            service_type = service.get("serviceType")
+            if not service_type:
+                continue
+
+            if plan_id == service_type:
+                return True
+
+            if core_products and service_type in core_products:
+                return True
+
+    return False
+
+
+def offer_applies(plan, offer):
+    service_type = plan.get("serviceType")
+    core_products = plan.get("coreProducts", [])
+
+    if core_products or service_type == "unknown":
+        return wireless_offer_applies(plan, offer)
+
+    return fibre_offer_applies(plan, offer)
+
+
+def get_promo_key(text):
+    if not text:
+        return None
+
+    lower = clean_text(text).lower()
+
+    if "free modem rental" in lower:
+        return "free_modem_rental"
+
+    if (
+        ("$5/m" in lower or "save $5" in lower or "5/m off" in lower)
+        and ("12 month" in lower or "12-month" in lower or "12 months" in lower)
+    ):
+        return "five_dollar_12_month_discount"
+
+    if "prime video" in lower:
+        return "prime_video"
+
+    if (
+        "mobile" in lower
+        and "broadband" in lower
+        and ("$10" in lower or "10/m" in lower)
+    ):
+        return "mobile_broadband_bundle_discount"
+
+    return lower
+
+
+def merge_promotions(base, offers):
+    promos = []
+    seen = set()
+
+    def add(text):
+        if not text:
+            return
+
+        clean = clean_text(text)
+        key = get_promo_key(clean)
+
+        if key not in seen:
+            promos.append(clean)
+            seen.add(key)
+
+    if base:
+        for promo in base.split(" | "):
+            add(promo)
+
+    for offer_text in offers:
+        if offer_text:
+            for promo in offer_text.split(" | "):
+                add(promo)
+
+    return " | ".join(promos) if promos else None
+
+
+def clean_plans(fixed, wireless, offers):
+    result = []
+
+    for item in fixed + wireless:
+        features = item.get("features") or []
+
+        feature = " | ".join(filter(None, [
+            item.get("discountMessage"),
+            *features,
+            item.get("topHatText"),
+            item.get("disclaimer")
+        ]))
+
+        base_promo = extract_base_promo(feature)
+        matched_promos = []
+
+        for offer in offers:
+            if not offer_applies(item, offer):
+                continue
+
+            text = extract_offer_text(offer)
+
+            if text:
+                matched_promos.append(text)
+
+        promo_text = merge_promotions(base_promo, matched_promos)
+
+        result.append({
+            "provider": "2degrees",
+            "plan_name": item.get("title"),
+            "connection_type": item.get("serviceType"),
+            "monthly_price": None,
+            "original_price": item.get("rrp"),
+            "promotion_text": promo_text,
+            "data_allowance": item.get("dataEntitlement"),
+            "speed_down_mbps": item.get("downSpeed"),
+            "speed_up_mbps": item.get("upSpeed"),
+            "contract_term_months": extract_contract_term_months(feature),
+            "landline_allowed": extract_landline_allowed(features),
+            "antenna_required": extract_antenna_required(feature),
+            "data_source": "API",
+            "source_url": "https://www.2degrees.nz/broadband/plans?discount=yes",
+            "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+    return result
+
 
 def get_twodegrees_plans():
-    fixed_cards, wireless_cards = fetch_twodegrees_plans()
+    fixed, wireless, offers = fetch_data()
+    plans = clean_plans(fixed, wireless, offers)
 
-    standardized_plans = []
-    for plan in clean_twodegrees_plans(fixed_cards, wireless_cards):
-        standardized_plans.append(
-            standardize_plans(
-                provider="2degrees", 
-                plan_name=plan.get("title"),
-                connection_type=plan.get("serviceType"), 
-                original_price=plan.get("rrp"), 
-                promotion_text=plan.get("promotionText"),
-                data_allowance=plan.get("dataEntitlement"), 
-                speed_down_mbps=plan.get("downSpeed"), 
-                speed_up_mbps=plan.get("upSpeed"), 
-                contract_term_months=plan.get("contractTermMonth"),
-                landline_allowed=plan.get("landlineRequired"),
-                antenna_required=plan.get("antennaRequired"),
-                data_source="API", 
-                source_url="https://www.2degrees.nz/broadband/plans?discount=yes", 
-                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
+    return [
+        standardize_plans(
+            provider=p["provider"],
+            plan_name=p["plan_name"],
+            connection_type=p["connection_type"],
+            original_price=p["original_price"],
+            promotion_text=p["promotion_text"],
+            data_allowance=p["data_allowance"],
+            speed_down_mbps=p["speed_down_mbps"],
+            speed_up_mbps=p["speed_up_mbps"],
+            contract_term_months=p["contract_term_months"],
+            landline_allowed=p["landline_allowed"],
+            antenna_required=p["antenna_required"],
+            data_source=p["data_source"],
+            source_url=p["source_url"],
+            collected_at=p["collected_at"]
         )
-    return standardized_plans
+        for p in plans
+    ]
