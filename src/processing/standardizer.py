@@ -9,6 +9,8 @@ def clean_text(text):
         .replace("^^", "")
         .replace("**", "")
         .replace("^", "")
+        .replace("<b>", "")
+        .replace("</b>", "")
         .strip()
     )
 
