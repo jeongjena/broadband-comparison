@@ -86,9 +86,19 @@ def clean_genesis_plans(plans, _):
             continue
         seen.add(key)
 
+        raw_service_type = plan.get("serviceType")
+
+        connection_type = "Fibre"
+
+        if (
+            "2000" in str(raw_service_type)
+            or "4000" in str(raw_service_type)
+        ):
+            connection_type = "Hyperfibre"
+
         cleaned_plan = {
             "title": plan.get("planDescription"),
-            "serviceType": plan.get("serviceType"),
+            "serviceType": connection_type,
             "rrp": price,
             "dataEntitlement": plan.get("dataCap") or "Unlimited",
             "downSpeed": speeds.get("averageSpeedDownMbps"),

@@ -179,7 +179,7 @@ def clean_zeronet_plans(all_html):
                 monthly_price = extract_price_number(monthly_price_text)
 
             feature = clean_text(
-                details.get_text(" ", strip=True)
+                details.get_text(" | ", strip=True)
                 if details else None
             )
 
