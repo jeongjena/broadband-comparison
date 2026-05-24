@@ -16,6 +16,33 @@ headers = {
 }
 
 
+def infer_connection_type(plan_name, connection_type):
+    if connection_type and str(connection_type).lower() != "unknown":
+        return connection_type
+
+    if not plan_name:
+        return "Unknown"
+
+    lower = plan_name.lower()
+
+    if "wireless" in lower:
+        return "Wireless"
+
+    if "fibre" in lower or "fiber" in lower:
+        return "Fibre"
+
+    if "hyperfibre" in lower:
+        return "Fibre"
+
+    if "vdsl" in lower:
+        return "VDSL"
+
+    if "adsl" in lower:
+        return "ADSL"
+
+    return "Unknown"
+
+
 def fetch_data():
     fixed = requests.get(
         f"{BASE_URL}/broadbandPlanCards",
@@ -280,7 +307,10 @@ def clean_plans(fixed, wireless, offers):
         result.append({
             "provider": "2degrees",
             "plan_name": item.get("title"),
-            "connection_type": item.get("serviceType"),
+            "connection_type": infer_connection_type(
+                item.get("title"),
+                item.get("serviceType")
+            ),
             "monthly_price": None,
             "original_price": item.get("rrp"),
             "promotion_text": promo_text,
