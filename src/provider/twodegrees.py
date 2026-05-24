@@ -1,7 +1,7 @@
 import requests
 import re
 from datetime import datetime
-
+from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
 from processing.standardizer import standardize_plans
 
@@ -14,33 +14,6 @@ headers = {
     "referer": "https://www.2degrees.nz/",
     "user-agent": "Mozilla/5.0"
 }
-
-
-def infer_connection_type(plan_name, connection_type):
-    if connection_type and str(connection_type).lower() != "unknown":
-        return connection_type
-
-    if not plan_name:
-        return "Unknown"
-
-    lower = plan_name.lower()
-
-    if "wireless" in lower:
-        return "Wireless"
-
-    if "fibre" in lower or "fiber" in lower:
-        return "Fibre"
-
-    if "hyperfibre" in lower:
-        return "Fibre"
-
-    if "vdsl" in lower:
-        return "VDSL"
-
-    if "adsl" in lower:
-        return "ADSL"
-
-    return "Unknown"
 
 
 def fetch_data():
@@ -276,6 +249,11 @@ def merge_promotions(base, offers):
 
     return " | ".join(promos) if promos else None
 
+def get_service_type(service_type, title):
+    if service_type and str(service_type).lower() != "unknown":
+        return service_type
+    else:
+        return infer_connection_type(title)
 
 def clean_plans(fixed, wireless, offers):
     result = []
@@ -307,9 +285,9 @@ def clean_plans(fixed, wireless, offers):
         result.append({
             "provider": "2degrees",
             "plan_name": item.get("title"),
-            "connection_type": infer_connection_type(
+            "connection_type": get_service_type(
+                item.get("serviceType"),
                 item.get("title"),
-                item.get("serviceType")
             ),
             "monthly_price": None,
             "original_price": item.get("rrp"),

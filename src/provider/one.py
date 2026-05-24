@@ -1,6 +1,7 @@
 import requests
 import re
 from datetime import datetime
+from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
 from processing.standardizer import extract_paragraphs
 from processing.standardizer import standardize_plans
@@ -35,27 +36,6 @@ def fetch_one_plans():
     response = requests.post(url, headers=headers, json=data)
     res_json = response.json()
     return res_json.get("data", [])
-
-
-def infer_connection_type(plan_name):
-    if not plan_name:
-        return None
-
-    lower = plan_name.lower()
-
-    if "wireless" in lower:
-        return "Wireless"
-
-    if "fibre" in lower:
-        return "Fibre"
-
-    if "vdsl" in lower:
-        return "VDSL"
-
-    if "adsl" in lower:
-        return "ADSL"
-
-    return "Broadband"
 
 
 def extract_data_allowance(feature):

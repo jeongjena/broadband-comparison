@@ -2,6 +2,7 @@ import requests
 import json
 import re
 from datetime import datetime
+from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
 from processing.standardizer import standardize_plans
 
@@ -175,28 +176,14 @@ def extract_contract_term_months(term_name, entitlements=None):
     return None
 
 def extract_connection_type(category_identifiers, plan_name):
-    if not category_identifiers:
-        category_identifiers = []
-        
-    cats = [c.lower() for c in category_identifiers]
-    
-    if "fiber" in cats or "fibre" in cats:
-        return "Fibre"
-    if "wireless" in cats:
-        return "Wireless"
-    if "vdsl" in cats:
-        return "VDSL"
-    if "adsl" in cats:
-        return "ADSL"
-        
-    # Fallback to name check
-    name_lower = plan_name.lower()
-    if "fibre" in name_lower: return "Fibre"
-    if "wireless" in name_lower or "portable broadband" in name_lower: return "Wireless"
-    if "vdsl" in name_lower: return "VDSL"
-    if "adsl" in name_lower: return "ADSL"
-    
-    return "unknown"
+    category_text = " ".join(category_identifiers or [])
+
+    category = infer_connection_type(category_text)
+
+    if str(category).lower() == "unknown":
+        return infer_connection_type(plan_name)
+
+    return category
 
 def extract_data_allowance(entitlements):
     if not entitlements:
