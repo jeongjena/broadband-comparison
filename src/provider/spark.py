@@ -192,10 +192,11 @@ def extract_connection_type(category_identifiers, plan_name):
     # Fallback to name check
     name_lower = plan_name.lower()
     if "fibre" in name_lower: return "Fibre"
-    if "wireless" in name_lower: return "Wireless"
+    if "wireless" in name_lower or "portable broadband" in name_lower: return "Wireless"
     if "vdsl" in name_lower: return "VDSL"
+    if "adsl" in name_lower: return "ADSL"
     
-    return "Broadband"
+    return "unknown"
 
 def extract_data_allowance(entitlements):
     if not entitlements:
