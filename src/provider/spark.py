@@ -175,16 +175,6 @@ def extract_contract_term_months(term_name, entitlements=None):
                 
     return None
 
-def extract_connection_type(category_identifiers, plan_name):
-    category_text = " ".join(category_identifiers or [])
-
-    category = infer_connection_type(category_text)
-
-    if str(category).lower() == "unknown":
-        return infer_connection_type(plan_name)
-
-    return category
-
 def extract_data_allowance(entitlements):
     if not entitlements:
         return None
@@ -288,7 +278,7 @@ def clean_spark_plans(raw_data):
             
             cleaned_plan = {
                 "planName": plan_name,
-                "connectionType": extract_connection_type(categories, plan_name),
+                "connectionType": infer_connection_type(plan_name),
                 "monthlyPrice": monthly_price,
                 "originalPrice": original_price,
                 "contractTermMonth": extract_contract_term_months(term.get("name"), entitlements),
