@@ -13,73 +13,73 @@ from provider.electrickiwi import get_electrickiwi_plans
 from provider.wirelessnation import get_wirelessnation_plans
 
 def main():
-    # standardized_twodegrees_plans = get_twodegrees_plans()
-    # standardized_one_plans = get_one_plans()
-    # standardized_mercury_plans = get_mercury_plans()
-    # contact_plans = get_contact_plans()
-    # genesis_plans = get_genesis_plans()
-    # zeronet_plans = get_zeronet_plans()
-    # standardized_skinny_plans = get_skinny_plans()  
-    # standardized_sky_plans = get_sky_plans()
+    standardized_twodegrees_plans = get_twodegrees_plans()
+    standardized_one_plans = get_one_plans()
+    standardized_mercury_plans = get_mercury_plans()
+    contact_plans = get_contact_plans()
+    genesis_plans = get_genesis_plans()
+    zeronet_plans = get_zeronet_plans()
+    standardized_skinny_plans = get_skinny_plans()  
+    standardized_sky_plans = get_sky_plans()
     standardized_spark_plans = get_spark_plans()
-    # electrickiwi_plans = get_electrickiwi_plans()
-    # wirelessnation_plans = get_wirelessnation_plans()
+    electrickiwi_plans = get_electrickiwi_plans()
+    wirelessnation_plans = get_wirelessnation_plans()
 
 
-    # print("2degrees Plan: \n")
-    # for plan in standardized_twodegrees_plans:
-    #     print(plan)
-    #     print("\n")
+    print("2degrees Plan: \n")
+    for plan in standardized_twodegrees_plans:
+        print(plan)
+        print("\n")
 
-    # print("One Plan: \n")
-    # for plan in standardized_one_plans:
-    #     print(plan)
-    #     print("\n")
+    print("One Plan: \n")
+    for plan in standardized_one_plans:
+        print(plan)
+        print("\n")
 
     print("Spark Plan: \n")
     for plan in standardized_spark_plans:
         print(plan)
         print("\n")
 
-    # print("Skinny Plan: \n")
-    # for plan in standardized_skinny_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Skinny Plan: \n")
+    for plan in standardized_skinny_plans:
+        print(plan)
+        print("\n")
         
-    # print("Mercury Plan: \n")
-    # for plan in standardized_mercury_plans:
-    #     print(plan)
-    #     print("\n")    
+    print("Mercury Plan: \n")
+    for plan in standardized_mercury_plans:
+        print(plan)
+        print("\n")    
 
-    # print("Contact Plan:\n")
-    # for plan in contact_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Contact Plan:\n")
+    for plan in contact_plans:
+        print(plan)
+        print("\n")
 
-    # print("Genesis Plan:\n")
-    # for plan in genesis_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Genesis Plan:\n")
+    for plan in genesis_plans:
+        print(plan)
+        print("\n")
     
-    # print("Sky Plans:\n")
-    # for plan in standardized_sky_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Sky Plans:\n")
+    for plan in standardized_sky_plans:
+        print(plan)
+        print("\n")
         
-    # print("Zeronet Plan:\n")
-    # for plan in zeronet_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Zeronet Plan:\n")
+    for plan in zeronet_plans:
+        print(plan)
+        print("\n")
     
-    # print("Electric Kiwi Plans:\n")
-    # for plan in electrickiwi_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Electric Kiwi Plans:\n")
+    for plan in electrickiwi_plans:
+        print(plan)
+        print("\n")
 
-    # print("Wireless Nation Plans:\n")
-    # for plan in wirelessnation_plans:
-    #     print(plan)
-    #     print("\n")
+    print("Wireless Nation Plans:\n")
+    for plan in wirelessnation_plans:
+        print(plan)
+        print("\n")
 
         
 if __name__ == "__main__":
