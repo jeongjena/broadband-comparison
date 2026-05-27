@@ -14,6 +14,28 @@ def clean_text(text):
         .strip()
     )
 
+def infer_connection_type(text):
+    if not text:
+        return None
+
+    lower = str(text).lower()
+
+    if "wireless" in lower or "portable broadband" in lower: return "Wireless"
+
+    if "hyperfibre" in lower or "hyperfiber" in lower:
+        return "Hyperfibre"
+
+    if "fibre" in lower or "fiber" in lower:
+        return "Fibre"
+
+    if "vdsl" in lower:
+        return "VDSL"
+
+    if "adsl" in lower:
+        return "ADSL"
+
+    return "unkown"
+
 def extract_list_items(html):
     if not html:
         return []

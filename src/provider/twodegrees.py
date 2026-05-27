@@ -1,7 +1,7 @@
 import requests
 import re
 from datetime import datetime
-
+from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
 from processing.standardizer import standardize_plans
 
@@ -249,6 +249,11 @@ def merge_promotions(base, offers):
 
     return " | ".join(promos) if promos else None
 
+def get_service_type(service_type, title):
+    if service_type and str(service_type).lower() != "unknown":
+        return service_type
+    else:
+        return infer_connection_type(title)
 
 def clean_plans(fixed, wireless, offers):
     result = []
@@ -280,7 +285,10 @@ def clean_plans(fixed, wireless, offers):
         result.append({
             "provider": "2degrees",
             "plan_name": item.get("title"),
-            "connection_type": item.get("serviceType"),
+            "connection_type": get_service_type(
+                item.get("serviceType"),
+                item.get("title"),
+            ),
             "monthly_price": None,
             "original_price": item.get("rrp"),
             "promotion_text": promo_text,
