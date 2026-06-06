@@ -39,7 +39,7 @@ def fetch_one_plans():
 
 
 def extract_promotion_message_text(html):
-    # Convert HTML promotion content into plain text for downstream extraction.
+    # Read all promotion text, including speed values that appear after <br> tags.
     if not html:
         return None
 
@@ -48,6 +48,7 @@ def extract_promotion_message_text(html):
 
 
 def extract_data_allowance(feature):
+    # Extract data allowance from promotion message text when the API does not provide it as a separate field.
     if not feature:
         return None
 
@@ -109,6 +110,7 @@ def extract_up_speed(feature):
 
 
 def extract_promotion_text(feature):
+    # Keep only customer-facing promotional or pricing-related text fragments.
     if not feature:
         return None
 
@@ -199,10 +201,10 @@ def extract_antenna_required(feature):
 
 
 def clean_one_plans(data):
-    # Extract and map plan attributes from API responses.
     filtered = []
 
     for item in data:
+        # FCPL_ entries are top-level broadband plans; components are add-ons/options.
         if item.get("id", "").startswith("FCPL_"):
             cleaned_feature = extract_promotion_message_text(item.get("promotion_message"))
 
