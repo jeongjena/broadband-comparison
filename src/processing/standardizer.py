@@ -34,7 +34,7 @@ def infer_connection_type(text):
     if "adsl" in lower:
         return "ADSL"
 
-    return "unkown"
+    return "unknown"
 
 def extract_list_items(html):
     if not html:
