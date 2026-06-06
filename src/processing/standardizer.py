@@ -1,6 +1,13 @@
-from bs4 import BeautifulSoup
+"""
+Shared standardisation helpers for broadband plan data.
+
+Provider modules handle most provider-specific extraction, cleaning, and
+attribute mapping. This module provides common helper functions and the shared
+standard plan schema used across providers.
+"""
 
 def clean_text(text):
+    # Remove simple markup artefacts and normalise extracted text.
     if text is None:
         return None
 
@@ -15,6 +22,7 @@ def clean_text(text):
     )
 
 def infer_connection_type(text):
+    # Infer the broadband connection type from plan names or descriptive text.
     if not text:
         return None
 
@@ -36,24 +44,6 @@ def infer_connection_type(text):
 
     return "unknown"
 
-def extract_list_items(html):
-    if not html:
-        return []
-    soup = BeautifulSoup(html, "html.parser")
-    return [li.get_text(strip=True) for li in soup.find_all("li")]
-
-def extract_paragraphs(html):
-    if not html:
-        return []
-    soup = BeautifulSoup(html, "html.parser")
-    for br in soup.find_all("br"):
-        br.replace_with(" - ")
-
-    return [
-        p.get_text(strip=True)
-        for p in soup.find_all("p")
-    ]
-
 def standardize_plans(
     provider=None,
     plan_name=None,
@@ -72,6 +62,9 @@ def standardize_plans(
     source_url=None,
     collected_at=None
 ):
+    """
+    Build a standard broadband plan record using the project's shared schema.
+    """
     return {
         "provider": provider,
         "plan_name": plan_name,

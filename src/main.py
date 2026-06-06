@@ -1,8 +1,13 @@
-from datetime import datetime
+"""
+Main application entry point for the broadband comparison prototype.
+
+This script runs each provider-specific extractor and prints the standardised
+broadband plan records returned by those modules.
+"""
+
 from provider.twodegrees import get_twodegrees_plans
 from provider.skinny import get_skinny_plans
 from provider.mercury import get_mercury_plans
-from processing.standardizer import standardize_plans
 from provider.contact import get_contact_plans
 from provider.genesis import get_genesis_plans
 from provider.zeronet import get_zeronet_plans
