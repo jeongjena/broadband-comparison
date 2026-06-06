@@ -2,7 +2,7 @@
 2degrees Broadband Plan Extractor
 
 Contributor: Jena Jeong (23208300)
-Version: 0.1
+Version: 0.5
 Last Updated: 2026-06-06
 
 Retrieves broadband plan, promotion, product, and hardware data from

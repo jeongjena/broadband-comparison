@@ -1,41 +1,50 @@
+"""
+One NZ Broadband Plan Extractor
+
+Contributor: Jena Jeong (23208300)
+Version: 0.4
+Last Updated: 2026-06-06
+
+Retrieves consumer broadband plan data from the One NZ public catalogue API
+and transforms the extracted values into the project's standardised plan format.
+"""
+
 import requests
 import re
 from datetime import datetime
+from bs4 import BeautifulSoup
 from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
-from processing.standardizer import extract_paragraphs
 from processing.standardizer import standardize_plans
+
 
 url = "https://api.public.one.nz/vf/public/ecomm-browse-plan-rest/api/v2/catalogue/plans/broadband"
 
 headers = {
     "Accept": "application/json, text/plain, */*",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
     "Content-Type": "application/json",
-    "Host": "api.public.one.nz",
     "Origin": "https://one.nz",
-    "Pragma": "no-cache",
     "Referer": "https://one.nz/",
-    "SID": "SS_9718ae09-425d-46e6-8f46-eef807a90d9f",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "User-Agent": "Mozilla/5.0",
-    "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"'
+    "User-Agent": "Mozilla/5.0"
 }
 
 data = {"segment": "Consumer"}
 
 
 def fetch_one_plans():
+    # Retrieve broadband plan records from the One NZ catalogue API.
     response = requests.post(url, headers=headers, json=data)
     res_json = response.json()
     return res_json.get("data", [])
+
+
+def extract_promotion_message_text(html):
+    # Convert HTML promotion content into plain text for downstream extraction.
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    return clean_text(soup.get_text(" | ", strip=True))
 
 
 def extract_data_allowance(feature):
@@ -190,15 +199,12 @@ def extract_antenna_required(feature):
 
 
 def clean_one_plans(data):
+    # Extract and map plan attributes from API responses.
     filtered = []
 
     for item in data:
         if item.get("id", "").startswith("FCPL_"):
-            feature_list = []
-
-            feature_list.extend(extract_paragraphs(item.get("promotion_message")))
-
-            cleaned_feature = clean_text(" | ".join(feature_list))
+            cleaned_feature = extract_promotion_message_text(item.get("promotion_message"))
 
             filtered.append({
                 "id": item.get("id"),
@@ -218,6 +224,7 @@ def clean_one_plans(data):
 
 
 def get_one_plans():
+    # Main entry point used to return standardised One NZ plan data.
     standardized_plans = []
 
     for plan in clean_one_plans(fetch_one_plans()):
