@@ -1,3 +1,15 @@
+"""
+2degrees Broadband Plan Extractor
+
+Contributor: Jena Jeong (23208300)
+Version: 0.1
+Last Updated: 2026-06-06
+
+Retrieves broadband plan, promotion, product, and hardware data from
+2degrees catalog APIs and transforms the results into the project's
+standardised plan format.
+"""
+
 import requests
 import re
 from datetime import datetime
@@ -16,7 +28,33 @@ headers = {
 }
 
 
+def catalog_items(data, key=None):
+    # Normalise API responses that may return either a list or a wrapped object.
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+        if key and isinstance(data.get(key), list):
+            return data.get(key)
+
+        if isinstance(data.get("value"), list):
+            return data.get("value")
+
+    return []
+
+
+def clean_money(value):
+    # Convert API decimal prices into compact dollar values for display text.
+    if value is None:
+        return None
+
+    amount = round(float(value), 2)
+
+    return int(amount) if amount.is_integer() else amount
+
+
 def fetch_data():
+    # Retrieve fixed broadband, wireless broadband, offer, product, and hardware data.
     fixed = requests.get(
         f"{BASE_URL}/broadbandPlanCards",
         headers=headers,
@@ -37,6 +75,7 @@ def fetch_data():
         }
     ).json()
 
+    # Offers provide current API-backed promotion copy.
     offers = requests.get(
         f"{BASE_URL}/offers/v2",
         headers=headers,
@@ -46,10 +85,41 @@ def fetch_data():
         }
     ).json()
 
-    return fixed, wireless, offers
+    # Products expose core product charges, including open-term connection fees.
+    products = requests.get(
+        f"{BASE_URL}/products",
+        headers=headers,
+        params={
+            "businessGroup": "2degrees",
+            "salesChannel": "OnlineSignup"
+        }
+    ).json()
+
+    plan_items = catalog_items(fixed) + catalog_items(wireless)
+    core_product_keys = sorted({
+        core_product
+        for item in plan_items
+        for core_product in item.get("coreProducts", [])
+    })
+    hardware_by_core_product = {}
+
+    # Hardware prices are scoped to each real core product key.
+    for core_product_key in core_product_keys:
+        hardware_by_core_product[core_product_key] = requests.get(
+            f"{BASE_URL}/hardwareProducts",
+            headers=headers,
+            params={
+                "businessGroup": "2degrees",
+                "salesChannel": "OnlineSignup",
+                "coreProductKey": core_product_key
+            }
+        ).json()
+
+    return fixed, wireless, offers, products, hardware_by_core_product
 
 
 def extract_offer_text(offer):
+    # Prefer offer description fields that contain customer-facing promotion text
     descriptions = offer.get("additionalData", {}).get("descriptions", [])
 
     priority = [
@@ -74,6 +144,7 @@ def extract_offer_text(offer):
 
 
 def extract_base_promo(feature):
+    # Pull promotion-like fragments from the plan feature text.
     if not feature:
         return None
 
@@ -96,6 +167,7 @@ def extract_base_promo(feature):
 
 
 def extract_contract_term_months(feature):
+    # Only extract explicit term requirements, not prices or fee amounts.
     if not feature:
         return None
 
@@ -145,7 +217,117 @@ def extract_antenna_required(feature):
     return None
 
 
+def extract_shipping_fee(text):
+    if not text:
+        return None
+
+    match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)\s*shipping fee", text, re.I)
+
+    if not match:
+        return None
+
+    amount = float(match.group(1))
+
+    return int(amount) if amount.is_integer() else amount
+
+
+def build_core_product_lookup(products):
+    # Index core products so plan-card core product keys can find detailed fees.
+    lookup = {}
+
+    for service in products.get("coreServices", []):
+        for product in service.get("coreProducts", []):
+            key = product.get("coreProductKey")
+
+            if key:
+                lookup[key] = product
+
+    return lookup
+
+
+def extract_open_term_connection_fee_text(item, core_product_lookup):
+    # Open-term connection fees live in the products API as core product charges.
+    for core_product_key in item.get("coreProducts", []):
+        product = core_product_lookup.get(core_product_key)
+
+        if not product:
+            continue
+
+        for charge in product.get("coreProductCharges", []):
+            if charge.get("chargeType") != "OpenTermContract":
+                continue
+
+            amount = clean_money(charge.get("chargeIncludingGst"))
+            description = clean_text(charge.get("billingDescription"))
+
+            if amount is None or not description:
+                continue
+
+            return f"Open term {description}: ${amount}"
+
+    return None
+
+
+def get_hardware_for_plan(item, hardware_by_core_product):
+    # Hardware prices are returned per core product, then de-duplicated by key.
+    hardware = []
+    seen = set()
+
+    for core_product_key in item.get("coreProducts", []):
+        response = hardware_by_core_product.get(core_product_key, {})
+
+        for hardware_product in catalog_items(response, "hardwareProducts"):
+            key = hardware_product.get("hardwareProductKey")
+
+            if not key or key in seen:
+                continue
+
+            hardware.append(hardware_product)
+            seen.add(key)
+
+    return hardware
+
+
+def extract_catalog_modem_promo_texts(item, hardware_by_core_product):
+    # Extract customer-facing hardware purchase text from catalog hardware data.
+    promos = []
+    hardware = get_hardware_for_plan(item, hardware_by_core_product)
+
+    for product in hardware:
+        price = clean_money(product.get("rrpIncludingGst"))
+        description = clean_text(product.get("hardwareProductDescription"))
+
+        if (
+            product.get("purchaseType") == "Sales"
+            and product.get("hardwareProductType") in {"Router", "WbbModem"}
+            and price
+            and description
+        ):
+            promos.append(f"{description}: ${price}")
+            break
+
+    return promos
+
+
+def extract_modem_option_text(feature):
+    # Plan-card features already include modem rental/BYO text.
+    if not feature:
+        return None
+
+    modem_parts = [
+        clean_text(part)
+        for part in feature.split("|")
+        if "modem" in part.lower() or "wi-fi" in part.lower() or "wifi" in part.lower()
+    ]
+
+    if not modem_parts:
+        return None
+
+    return " | ".join(modem_parts)
+
+
 def fibre_offer_applies(plan, offer):
+    # Fixed-line offers may target service type strings embedded in plan IDs.
     plan_id = plan.get("id", "")
 
     for qualification in offer.get("offerQualifications", []):
@@ -164,6 +346,7 @@ def fibre_offer_applies(plan, offer):
 
 
 def wireless_offer_applies(plan, offer):
+    # Wireless offers usually match plan IDs or core product keys directly.
     plan_id = plan.get("id")
     core_products = plan.get("coreProducts", [])
 
@@ -224,6 +407,7 @@ def get_promo_key(text):
 
 
 def merge_promotions(base, offers):
+    # Merge plan-card and offer API promotions while avoiding obvious duplicates.
     promos = []
     seen = set()
 
@@ -255,10 +439,12 @@ def get_service_type(service_type, title):
     else:
         return infer_connection_type(title)
 
-def clean_plans(fixed, wireless, offers):
+def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
+    # Combine API responses and extract the fields required by the standard schema.
     result = []
+    core_product_lookup = build_core_product_lookup(products)
 
-    for item in fixed + wireless:
+    for item in catalog_items(fixed) + catalog_items(wireless):
         features = item.get("features") or []
 
         feature = " | ".join(filter(None, [
@@ -280,7 +466,27 @@ def clean_plans(fixed, wireless, offers):
             if text:
                 matched_promos.append(text)
 
-        promo_text = merge_promotions(base_promo, matched_promos)
+        modem_option_text = extract_modem_option_text(feature)
+        extracted_promo_texts = []
+
+        if modem_option_text:
+            extracted_promo_texts.append(modem_option_text)
+
+        open_term_connection_fee_text = extract_open_term_connection_fee_text(
+            item,
+            core_product_lookup,
+        )
+        if open_term_connection_fee_text:
+            extracted_promo_texts.append(open_term_connection_fee_text)
+
+        extracted_promo_texts.extend(
+            extract_catalog_modem_promo_texts(item, hardware_by_core_product)
+        )
+
+        promo_text = merge_promotions(
+            base_promo,
+            matched_promos + extracted_promo_texts,
+        )
 
         result.append({
             "provider": "2degrees",
@@ -300,18 +506,21 @@ def clean_plans(fixed, wireless, offers):
             "antenna_required": extract_antenna_required(feature),
             "data_source": "API",
             "source_url": "https://www.2degrees.nz/broadband/plans?discount=yes",
-            "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
     return result
 
 
 def get_twodegrees_plans():
-    fixed, wireless, offers = fetch_data()
-    plans = clean_plans(fixed, wireless, offers)
+    # Main entry point used by the aggregator.
+    fixed, wireless, offers, products, hardware_by_core_product = fetch_data()
+    plans = clean_plans(fixed, wireless, offers, products, hardware_by_core_product)
 
-    return [
-        standardize_plans(
+    standardized = []
+
+    for p in plans:
+        plan = standardize_plans(
             provider=p["provider"],
             plan_name=p["plan_name"],
             connection_type=p["connection_type"],
@@ -327,5 +536,7 @@ def get_twodegrees_plans():
             source_url=p["source_url"],
             collected_at=p["collected_at"]
         )
-        for p in plans
-    ]
+
+        standardized.append(plan)
+
+    return standardized
