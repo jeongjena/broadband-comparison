@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 import re
+import traceback
 
 from bs4 import BeautifulSoup
 
@@ -47,9 +48,10 @@ def fetch_zeronet_plans():
         # scrape default 12 month plans
         all_html.append({
             "contractTermMonths": 12,
+            "billingFrequency": "Monthly",
             "html": driver.page_source
         })
-
+        """
         # click no-term tab
         no_term_button = driver.find_element(
             By.CSS_SELECTOR,
@@ -72,8 +74,30 @@ def fetch_zeronet_plans():
         all_html.append({
             "contractTermMonths": None,
             "html": driver.page_source
+        }) """
+
+        # switch to weekly plans
+        weekly_button = driver.find_element(
+            By.CSS_SELECTOR,
+            'label[for="switch-frequency-Weekly"]'
+        )
+
+        driver.execute_script(
+            "arguments[0].click();",
+            weekly_button
+        )
+
+        import time
+        time.sleep(2)
+
+        # scrape weekly plans
+        all_html.append({
+            "contractTermMonths": 12,
+            "billingFrequency": "Weekly",
+            "html": driver.page_source
         })
 
+        """
         # locate hyperfibre button
         hyperfibre_button = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable(
@@ -82,10 +106,21 @@ def fetch_zeronet_plans():
                     "//button[contains(., 'Hyperfibre')]"
                 )
             )
+        )"""
+        """
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+
+        for b in buttons:
+            print(b.text)
+
+        
+        hyperfibre_button = driver.find_element(
+            By.XPATH,
+            "//button[.//span[contains(text(),'View Hyperfibre Plans Here')]]"
         )
 
         driver.execute_script(
-            "arguments[0].scrollIntoView();",
+            "arguments[0].scrollIntoView({block: 'center'});",
             hyperfibre_button
         )
 
@@ -94,19 +129,30 @@ def fetch_zeronet_plans():
             hyperfibre_button
         )
 
+        time.sleep(3)
+
+        print("Current URL:", driver.current_url)
+
         # wait for plans to update
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located(
                 (By.CLASS_NAME, "plan-card")
             )
         )
-
+        
         # scrape hyperfibre plans
         all_html.append({
             "contractTermMonths": None,
             "html": driver.page_source
         })
-
+        """
+        """
+        all_html.append({
+            "contractTermMonths": 12,
+            "billingFrequency": "Monthly",
+            "html": driver.page_source
+        })
+        """
         RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
         RAW_PATH.write_text(driver.page_source, encoding="utf-8")
 
@@ -210,11 +256,17 @@ def clean_zeronet_plans(all_html):
                 "landlineAllowed": None,
                 "antennaRequired": False
             }
-
+            """
             # deduplicate by plan + contract type
             key = (
                 cleaned_plan["title"],
                 cleaned_plan["contractTermMonths"]
+            )"""
+
+            key = (
+                cleaned_plan["title"],
+                cleaned_plan["contractTermMonths"],
+                page.get("billingFrequency")
             )
 
             if key in seen:
@@ -259,9 +311,8 @@ def get_zeronet_plans():
             )
 
         return standardized
-
     except Exception as e:
-        print(f"[ERROR] Zeronet failed: {e}")
+        print(f"[ERROR] Zeronet failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return []
-
 
