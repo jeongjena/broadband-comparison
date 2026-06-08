@@ -1,3 +1,17 @@
+"""
+Zeronet Broadband Plan Scraper
+
+Contributor: Markus Salvador (23203124)
+Version: 0.5
+Last Updated: 2026-06-09
+
+Retrieves broadband plan information from the Zeronet website using
+Selenium and BeautifulSoup. The scraper captures three page states:
+monthly fibre, monthly hyperfibre, and weekly plans (including both
+fibre and hyperfibre offerings), before transforming the results into
+the project's standardised format.
+"""
+
 from datetime import datetime
 import time
 from pathlib import Path
@@ -23,6 +37,11 @@ RAW_PATH = RAW_DIR / "zeronet.html"
 
 
 def fetch_zeronet_plans():
+    # Load the Zeronet plans page and capture all pricing views required
+    # for extraction. Selenium is used because plan content changes
+    # dynamically after user interaction.
+
+
     options = webdriver.ChromeOptions()
 
     # run browser in headless mode
@@ -55,9 +74,12 @@ def fetch_zeronet_plans():
         
         buttons = driver.find_elements(By.TAG_NAME, "button")
 
-        # TEMPORARY FIX ONLY:
-        # ASSUMES THE HYPERFIBRE BUTTON IS LAST BUTTON ON THE PAGE
-        # THIS MAY BREAK IF ZERONET CHANGE THEIR PAGE LAYOUT 
+        # Temporary workaround:
+        # The Hyperfibre toggle is currently the final button rendered in the
+        # plans panel. Once selected, the button disappears because the page is
+        # already displaying Hyperfibre plans. This extractor therefore uses the
+        # final button on initial page load as the Hyperfibre selector.
+        # May require updating if Zeronet changes their page layout.
         hyperfibre_button = buttons[-1]
 
         driver.execute_script(
@@ -109,6 +131,8 @@ def fetch_zeronet_plans():
         driver.quit()
 
 def extract_price_number(text):
+    # Converts price strings such as "$99.00" into numeric values. 
+
     if not text:
         return None
 
@@ -121,6 +145,9 @@ def extract_price_number(text):
 
 
 def extract_speed(text):
+    # Extracts the numeric component from speed labels such as
+    # "500 Mbps Download".
+
     if not text:
         return None
 
@@ -130,6 +157,9 @@ def extract_speed(text):
 
 
 def clean_zeronet_plans(all_html):
+    # Parse captured HTML snapshots and map plan information into the 
+    # intermediate project schema before standardisation.
+
     cleaned_plans = []
 
     # prevent duplicate plans
@@ -252,6 +282,8 @@ def clean_zeronet_plans(all_html):
 
 
 def get_zeronet_plans():
+    # Main entry point used by the project aggregator. 
+
     try:
         all_html = fetch_zeronet_plans()
 
