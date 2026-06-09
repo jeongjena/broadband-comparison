@@ -1,9 +1,21 @@
+"""
+Genesis Broadband API Extractor
+
+Contributor: Markus Salvador (23203124)
+Version: 0.5
+Last Updated: 2026-06-10
+
+Retrieves broadband plan information from the Genesis broadband API,
+extracts internet service plans, and transforms the results into the
+project's standardised format.
+"""
+
 import re
 import requests
 from datetime import datetime
 from processing.standardizer import standardize_plans
 
-url = "https://api.2degrees.nz/sales/v3/catalog/products?businessGroup=genesis&salesChannel=OnlineSignup"
+URL = "https://api.2degrees.nz/sales/v3/catalog/products?businessGroup=genesis&salesChannel=OnlineSignup"
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -14,7 +26,8 @@ headers = {
 
 def fetch_genesis_plans():
     # line call
-    res = requests.get(url, headers=headers)
+    res = requests.get(URL, headers=headers)
+    res.raise_for_status()
     data = res.json()
 
     all_plans = []
@@ -32,7 +45,7 @@ def fetch_genesis_plans():
                         "plan": plan
                     })
 
-    return all_plans, []
+    return all_plans
 
 def extract_promotion_text(features):
     if not features:
@@ -53,9 +66,10 @@ def extract_contract_term(features):
     return int(match.group(1)) if match else None
 
 
-def clean_genesis_plans(plans, _):
+def clean_genesis_plans(plans):
     cleaned_plans = []
-    seen = set() # to track duplicates based on (plan name, speed)
+    # Track duplicates based on plan name and speed
+    seen = set() 
 
     for item in plans:
         product = item.get("product", {})
@@ -90,6 +104,8 @@ def clean_genesis_plans(plans, _):
 
         connection_type = "Fibre"
 
+        # Genesis identifies Hyperfibre plans using 2000 Mbps and
+        # 4000 Mbps service tiers.
         if (
             "2000" in str(raw_service_type)
             or "4000" in str(raw_service_type)
@@ -114,8 +130,8 @@ def clean_genesis_plans(plans, _):
     return cleaned_plans
 
 def get_genesis_plans():
-    plans, _ = fetch_genesis_plans()
-    cleaned = clean_genesis_plans(plans, _)
+    plans = fetch_genesis_plans()
+    cleaned = clean_genesis_plans(plans)
 
     standardized = [] 
 

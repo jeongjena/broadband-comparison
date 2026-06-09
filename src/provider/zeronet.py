@@ -87,14 +87,14 @@ def fetch_zeronet_plans():
             hyperfibre_button
         )
 
-        time.sleep(2)
+        time.sleep(1)
 
         driver.execute_script(
             "arguments[0].click();",
             hyperfibre_button
         )
 
-        time.sleep(5) 
+        time.sleep(1) 
 
         # scrape monthly hyperfibre
         all_html.append({
@@ -113,7 +113,7 @@ def fetch_zeronet_plans():
             weekly_button
         )
 
-        time.sleep(3)
+        time.sleep(1)
 
         # scrape weekly plans
         all_html.append({
@@ -129,6 +129,7 @@ def fetch_zeronet_plans():
     
     finally: 
         driver.quit()
+
 
 def extract_price_number(text):
     # Converts price strings such as "$99.00" into numeric values. 
