@@ -132,7 +132,6 @@ query BroadbandPlansQuery(
           releaseDate
         }
         broadbandCharacteristics {
-          landlineAllowed
           landlineVariant
           landlineIncluded
           antennaRequired
@@ -176,46 +175,121 @@ def fetch_spark_plans():
 
     return data
 
+
+def clean_money(value):
+    if value is None:
+        return None
+
+    amount = round(float(value), 2)
+
+    return int(amount) if amount.is_integer() else amount
+
+
+def entitlement_text(entitlement):
+    parts = []
+
+    for part in filter(None, [
+        entitlement.get("name"),
+        entitlement.get("shortDescription"),
+        entitlement.get("longDescription"),
+    ]):
+        clean_part = str(part).strip()
+        lower = clean_part.lower()
+
+        if any(lower == existing.lower() or lower in existing.lower() for existing in parts):
+            continue
+
+        parts.append(clean_part)
+
+    return " ".join(parts)
+
+
+def extract_contract_entitlements(entitlements):
+    return [
+        entitlement
+        for entitlement in entitlements or []
+        if entitlement.get("type") == "Contract"
+        or "term" in (entitlement.get("name") or "").lower()
+    ]
+
+
 def extract_contract_term_months(term_name, entitlements=None):
-    # Extract contract terms from the contract field, with entitlement fallback.
-    
-    # 1. Try from term_name
+    # Only fixed term lengths belong here; open term is represented by contract_type.
+    texts = []
+
     if term_name:
-        match = re.search(r"(\d+)\s*month", term_name.lower())
+        texts.append(term_name)
+
+    texts.extend(entitlement.get("name", "") for entitlement in extract_contract_entitlements(entitlements))
+
+    for text in texts:
+        match = re.search(r"(\d+)\s*month", text.lower())
+
         if match:
             return int(match.group(1))
-        if "open" in term_name.lower() or "no contract" in term_name.lower():
-            return 0
-    
-    # 2. Fallback to entitlements
-    if entitlements:
-        for ent in entitlements:
-            name = ent.get("name", "").lower()
-            if "open term" in name or "no contract" in name:
-                return 0
-            match = re.search(r"(\d+)\s*month", name)
-            if match:
-                return int(match.group(1))
-                
+
     return None
+
+
+def extract_contract_type(term_name, entitlements=None):
+    texts = []
+
+    if term_name:
+        texts.append(term_name)
+
+    texts.extend(entitlement.get("name", "") for entitlement in extract_contract_entitlements(entitlements))
+    lower_text = " | ".join(texts).lower()
+    has_open = "open term" in lower_text or "no contract" in lower_text
+    has_fixed = bool(re.search(r"\d+\s*month", lower_text))
+
+    if has_open and has_fixed:
+        return "open_or_fixed"
+
+    if has_open:
+        return "open"
+
+    if has_fixed:
+        return "fixed"
+
+    return None
+
+
+def extract_contract_condition_text(term_name, entitlements=None):
+    parts = []
+
+    if term_name:
+        parts.append(clean_text(term_name))
+
+    for entitlement in extract_contract_entitlements(entitlements):
+        name = clean_text(entitlement.get("name"))
+
+        if name:
+            parts.append(name)
+
+    return " | ".join(dict.fromkeys(parts)) if parts else None
 
 def extract_data_allowance(entitlements):
     if not entitlements:
         return None
-    
+
     for ent in entitlements:
         if ent.get("unlimited"):
             return "Unlimited"
-        name = ent.get("name", "").lower()
-        if "data" in name or "gigabytes" in name:
-            quantity = ent.get("quantity")
-            if quantity is not None:
-                amount = float(quantity)
-                return int(amount) if amount.is_integer() else amount
-            match = re.search(r"(\d+)\s*(gb|gigabytes)", name)
-            if match:
-                return int(match.group(1))
-            
+
+        if ent.get("type") != "Data":
+            continue
+
+        quantity = ent.get("quantity")
+        if quantity is not None:
+            amount = float(quantity)
+            return int(amount) if amount.is_integer() else amount
+
+        text = entitlement_text(ent).lower()
+        match = re.search(r"(\d+(?:\.\d+)?)\s*(gb|gigabytes)", text)
+        if match:
+            amount = float(match.group(1))
+            return int(amount) if amount.is_integer() else amount
+
     return None
 
 def extract_speeds(entitlements):
@@ -237,45 +311,160 @@ def extract_speeds(entitlements):
                 
     return None, None
 
-def extract_promotion_text(promotions, entitlements, characteristics):
-    # Combine promotion, entitlement, and broadband feature information.
-    promo_texts = []
-    
-    # 1. From promotions list
-    if promotions:
-        for promo in promotions:
-            name = promo.get("name")
-            desc = promo.get("shortDescription")
-            if name:
-                promo_texts.append(clean_text(name))
-            elif desc:
-                promo_texts.append(clean_text(desc))
-    
-    # 2. From entitlements (Join offers, Modem info, Contract info)
-    if entitlements:
-        for ent in entitlements:
-            name = ent.get("name")
-            ent_type = ent.get("type")
-            long_desc = ent.get("longDescription")
-            
-            # Join offers or specific gifts
-            if ent_type == "Gift" or (name and "offer" in name.lower()):
-                if long_desc:
-                    promo_texts.append(clean_text(long_desc))
-            
-            # Modem info
-            if ent_type == "Modem" and long_desc:
-                promo_texts.append(clean_text(long_desc))
-                
-            # Contract / Open term info if relevant
-            if ent_type == "Contract" and name:
-                promo_texts.append(clean_text(name))
 
-    # 3. From characteristics (Landline included)
-    if characteristics.get("landlineIncluded"):
-        promo_texts.append("Landline included")
-            
+def extract_promo_discount(promotions, base_price):
+    for promotion in promotions or []:
+        text = promotion.get("longDescription") or " ".join(filter(None, [
+            promotion.get("name"),
+            promotion.get("shortDescription"),
+        ]))
+
+        match = re.search(
+            r"\$(\d+(?:\.\d{1,2})?)\s*off\s*per\s*month\s*for\s*(\d+)\s*months",
+            text,
+            re.I,
+        )
+
+        if not match:
+            continue
+
+        saving_amount = clean_money(match.group(1))
+        period_months = int(match.group(2))
+        promo_price = None
+
+        if base_price is not None and saving_amount is not None:
+            promo_price = clean_money(float(base_price) - float(saving_amount))
+
+        return promo_price, period_months, clean_text(text)
+
+    return None, None, None
+
+
+def extract_modem_details(entitlements):
+    details = {}
+
+    for entitlement in entitlements or []:
+        text = entitlement_text(entitlement)
+        lower = text.lower()
+
+        if "modem" not in lower:
+            continue
+
+        clean = clean_text(text)
+        modem_condition = clean
+
+        if "use your own compatible modem" in lower:
+            details["byo_modem_allowed"] = True
+
+        if "modem included" in lower:
+            modem_included_match = re.search(r"modem included", clean, re.I)
+            details["byo_modem_allowed"] = False
+            details["modem_rental_available"] = True
+            details["modem_rental_price"] = 0
+            details["modem_rental_billing_frequency"] = "Monthly"
+            details["modem_rental_condition_text"] = (
+                modem_included_match.group(0)
+                if modem_included_match
+                else clean
+            )
+
+        if "modem required" in lower or "add on a spark modem" in lower:
+            if "use your own compatible modem" not in lower:
+                details["byo_modem_allowed"] = False
+
+            if "add on a spark modem" in lower:
+                details["modem_purchase_available"] = True
+
+            details["modem_purchase_condition_text"] = clean
+
+        price_match = re.search(r"modem\s+for\s+\$(\d+(?:\.\d{1,2})?)", text, re.I)
+
+        if price_match:
+            details["modem_purchase_available"] = True
+            details["modem_purchase_price"] = clean_money(price_match.group(1))
+
+        delivery_match = re.search(r"\$(\d+(?:\.\d{1,2})?)\s*delivery", text, re.I)
+
+        if delivery_match:
+            details["shipping_fee"] = clean_money(delivery_match.group(1))
+
+        early_fee_match = re.search(
+            r"early termination fee of\s*\$(\d+(?:\.\d{1,2})?)",
+            text,
+            re.I,
+        )
+
+        if early_fee_match:
+            details["early_termination_fee"] = clean_money(early_fee_match.group(1))
+            details["early_termination_fee_condition_text"] = clean
+
+    return details
+
+
+def extract_promotion_text(promotions, entitlements, promo_offer_text=None):
+    # Keep promotional copy that is not already mapped to structured fields.
+    promo_texts = []
+
+    if promo_offer_text:
+        promo_texts.append(clean_text(promo_offer_text))
+
+    for promo in promotions or []:
+        text = clean_text(" | ".join(filter(None, [
+            promo.get("name"),
+            promo.get("shortDescription"),
+            promo.get("longDescription"),
+        ])))
+
+        if not text:
+            continue
+
+        lower = text.lower()
+
+        if "$" in lower and "off per month" in lower:
+            continue
+
+        promo_texts.append(text)
+
+    for entitlement in entitlements or []:
+        text = clean_text(entitlement_text(entitlement))
+
+        if not text:
+            continue
+
+        lower = text.lower()
+
+        if "modem" in lower or "term" in lower or "add landline" in lower:
+            continue
+
+        if "landline included" in lower:
+            continue
+
+        if "only $" in lower or "included" in lower:
+            promo_texts.append(text)
+
     return " | ".join(dict.fromkeys(promo_texts)) if promo_texts else None
+
+
+def extract_raw_offer_text(promotions, entitlements):
+    parts = []
+
+    for promo in promotions or []:
+        text = clean_text(" | ".join(filter(None, [
+            promo.get("name"),
+            promo.get("shortDescription"),
+            promo.get("longDescription"),
+        ])))
+
+        if text:
+            parts.append(text)
+
+    for entitlement in entitlements or []:
+        text = clean_text(entitlement_text(entitlement))
+
+        if text:
+            parts.append(text)
+
+    return " | ".join(dict.fromkeys(parts)) if parts else None
 
 def clean_spark_plans(raw_data):
     # Extract and map plan attributes from GraphQL responses.
@@ -300,10 +489,13 @@ def clean_spark_plans(raw_data):
             
             speed_down, speed_up = extract_speeds(entitlements)
             
-            # Price logic: effective is monthly, base is original
-            effective_price = price.get("effectivePrice")
-            monthly_price = effective_price if effective_price is not None else price.get("basePrice")
-            original_price = price.get("basePrice")
+            # Price logic: base is the regular monthly price; promo may come from API offer copy.
+            base_price = price.get("basePrice")
+            promo_price, promo_period, promo_offer_text = extract_promo_discount(
+                promotions,
+                base_price,
+            )
+
             connection_text = " ".join(filter(None, [
                 plan_name,
                 details.get("productType"),
@@ -312,21 +504,40 @@ def clean_spark_plans(raw_data):
             ]))
             connection_type = infer_connection_type(plan_name)
 
-            if connection_type in {None, "unknown", "unkown"}:
+            if connection_type in {None, "unknown"}:
                 connection_type = infer_connection_type(connection_text)
+
+            modem_details = extract_modem_details(entitlements)
+            contract_type = extract_contract_type(term.get("name"), entitlements)
             
             cleaned_plan = {
                 "planName": plan_name,
                 "connectionType": connection_type,
-                "monthlyPrice": monthly_price,
-                "originalPrice": original_price,
+                "price": base_price,
+                "billingFrequency": "Monthly",
+                "promoPrice": promo_price,
+                "promoPeriod": promo_period,
+                "promoPeriodUnit": "months" if promo_period else None,
+                "contractType": contract_type,
                 "contractTermMonth": extract_contract_term_months(term.get("name"), entitlements),
+                "contractConditionText": extract_contract_condition_text(term.get("name"), entitlements),
                 "dataAllowance": extract_data_allowance(entitlements),
-                "promotionText": extract_promotion_text(promotions, entitlements, characteristics),
-                "landlineAllowed": characteristics.get("landlineAllowed"),
+                "promotionText": extract_promotion_text(promotions, entitlements, promo_offer_text),
+                "byoModemAllowed": modem_details.get("byo_modem_allowed"),
+                "modemRentalAvailable": modem_details.get("modem_rental_available"),
+                "modemRentalPrice": modem_details.get("modem_rental_price"),
+                "modemRentalBillingFrequency": modem_details.get("modem_rental_billing_frequency"),
+                "modemRentalConditionText": modem_details.get("modem_rental_condition_text"),
+                "modemPurchaseAvailable": modem_details.get("modem_purchase_available"),
+                "modemPurchasePrice": modem_details.get("modem_purchase_price"),
+                "modemPurchaseConditionText": modem_details.get("modem_purchase_condition_text"),
+                "shippingFee": modem_details.get("shipping_fee"),
+                "earlyTerminationFee": modem_details.get("early_termination_fee"),
+                "earlyTerminationFeeConditionText": modem_details.get("early_termination_fee_condition_text"),
                 "antennaRequired": characteristics.get("antennaRequired"),
                 "speedDown": speed_down,
-                "speedUp": speed_up
+                "speedUp": speed_up,
+                "rawOfferText": extract_raw_offer_text(promotions, entitlements),
             }
             cleaned_plans.append(cleaned_plan)
             
@@ -344,18 +555,37 @@ def get_spark_plans():
                     provider="Spark",
                     plan_name=plan.get("planName"),
                     connection_type=plan.get("connectionType"),
-                    monthly_price=plan.get("monthlyPrice"),
-                    original_price=plan.get("originalPrice"), 
-                    promotion_text=plan.get("promotionText"),
+                    price=plan.get("price"),
+                    billing_frequency=plan.get("billingFrequency"),
+                    promo_price=plan.get("promoPrice"),
+                    promo_period=plan.get("promoPeriod"),
+                    promo_period_unit=plan.get("promoPeriodUnit"),
                     data_allowance=plan.get("dataAllowance"),
                     speed_down_mbps=plan.get("speedDown"),
                     speed_up_mbps=plan.get("speedUp"),
+                    contract_type=plan.get("contractType"),
                     contract_term_months=plan.get("contractTermMonth"),
-                    landline_allowed=plan.get("landlineAllowed"),
+                    contract_condition_text=plan.get("contractConditionText"),
+                    early_termination_fee=plan.get("earlyTerminationFee"),
+                    early_termination_fee_condition_text=plan.get("earlyTerminationFeeConditionText"),
+                    shipping_fee=plan.get("shippingFee"),
+                    power_bundle_available=plan.get("powerBundleAvailable"),
+                    power_bundle_saving_amount=plan.get("powerBundleSavingAmount"),
+                    power_bundle_saving_pct=plan.get("powerBundleSavingPct"),
+                    byo_modem_allowed=plan.get("byoModemAllowed"),
+                    modem_rental_available=plan.get("modemRentalAvailable"),
+                    modem_rental_price=plan.get("modemRentalPrice"),
+                    modem_rental_billing_frequency=plan.get("modemRentalBillingFrequency"),
+                    modem_rental_condition_text=plan.get("modemRentalConditionText"),
+                    modem_purchase_available=plan.get("modemPurchaseAvailable"),
+                    modem_purchase_price=plan.get("modemPurchasePrice"),
+                    modem_purchase_condition_text=plan.get("modemPurchaseConditionText"),
                     antenna_required=plan.get("antennaRequired"),
                     data_source="API",
                     source_url="https://www.spark.co.nz/shop/broadband/plans/",
-                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    promotion_text=plan.get("promotionText"),
+                    raw_offer_text=plan.get("rawOfferText"),
                 )
             )
         return standardized_plans
