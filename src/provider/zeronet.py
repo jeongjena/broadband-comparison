@@ -6,11 +6,18 @@ Version: 0.5
 Last Updated: 2026-06-09
 
 Retrieves broadband plan information from the Zeronet website using
-Selenium and BeautifulSoup. The scraper captures three page states:
-monthly fibre, monthly hyperfibre, and weekly plans (including both
-fibre and hyperfibre offerings), before transforming the results into
-the project's standardised format.
+Selenium and BeautifulSoup. The scraper captures four page states:
+monthly fibre, monthly hyperfibre, weekly fibre, and weekly hyperfibre plans, 
+before transforming the results intothe project's standardised format.
 """
+
+# TODO:
+# Confirm whether Hyperfibre struck-through pricing should map to:
+# - price + promo_price
+# - or rrp + price
+#
+# Current implementation:
+# price=145, promo_price=135
 
 from datetime import datetime
 import time
@@ -45,6 +52,8 @@ def find_hyperfibre_button(driver):
 
 
 def click_hyperfibre_button(driver):
+    start = time.perf_counter()
+
     hyperfibre_button = find_hyperfibre_button(driver)
 
     driver.execute_script(
@@ -52,14 +61,19 @@ def click_hyperfibre_button(driver):
         hyperfibre_button
     )
 
-    time.sleep(2)
+    time.sleep(0.5)
 
     driver.execute_script(
         "arguments[0].click();",
         hyperfibre_button
     )
 
-    time.sleep(5)
+    time.sleep(2)
+
+    print(
+        f"[TIMING] Hyperfibre toggle: "
+        f"{time.perf_counter() - start:.2f}s"
+    )
 
 
 def fetch_zeronet_plans():
@@ -91,20 +105,38 @@ def fetch_zeronet_plans():
 
         all_html = []
 
-        # scrape monthly plans
+        start = time.perf_counter()
+
+        monthly_details = collect_selected_plan_details(driver)
+
+        print(
+            f"[TIMING] Monthly Fibre details: "
+            f"{time.perf_counter() - start:.2f}s"
+        )
+
         all_html.append({
             "billingFrequency": "Monthly",
             "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "selectedPlanDetails": monthly_details
         })
         
         click_hyperfibre_button(driver)
 
-        # scrape monthly hyperfibre
+        hyper_html = driver.page_source
+
+        start = time.perf_counter()
+
+        monthly_hyper_details = collect_selected_plan_details(driver)
+
+        print(
+            f"[TIMING] Monthly Hyperfibre details: "
+            f"{time.perf_counter() - start:.2f}s"
+        )
+
         all_html.append({
             "billingFrequency": "Monthly",
-            "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "html": hyper_html,
+            "selectedPlanDetails": monthly_hyper_details
         })
 
         weekly_button = driver.find_element(
@@ -119,20 +151,38 @@ def fetch_zeronet_plans():
 
         time.sleep(1)
 
-        # scrape weekly plans
+        start = time.perf_counter()
+
+        weekly_details = collect_selected_plan_details(driver)
+
+        print(
+            f"[TIMING] Weekly Fibre details: "
+            f"{time.perf_counter() - start:.2f}s"
+        )
+
         all_html.append({
             "billingFrequency": "Weekly",
             "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "selectedPlanDetails": weekly_details
         })
 
         click_hyperfibre_button(driver)
 
-        # scrape weekly hyperfibre
+        hyper_html = driver.page_source
+
+        start = time.perf_counter()
+
+        weekly_hyper_details = collect_selected_plan_details(driver)
+
+        print(
+            f"[TIMING] Weekly Hyperfibre details: "
+            f"{time.perf_counter() - start:.2f}s"
+        )
+
         all_html.append({
             "billingFrequency": "Weekly",
-            "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "html": hyper_html,
+            "selectedPlanDetails": weekly_hyper_details
         })
         
         RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -173,9 +223,9 @@ def collect_selected_plan_details(driver):
                 "arguments[0].scrollIntoView({block: 'center'});",
                 button
             )
-            time.sleep(0.5)
+            time.sleep(0.1)
             driver.execute_script("arguments[0].click();", button)
-            time.sleep(2)
+            time.sleep(0.5)
 
             body_text = clean_text(
                 driver.find_element(By.TAG_NAME, "body").text
@@ -194,7 +244,7 @@ def collect_selected_plan_details(driver):
                 )
                 if close_buttons:
                     driver.execute_script("arguments[0].click();", close_buttons[0])
-                    time.sleep(0.5)
+                    time.sleep(0.1)
 
         except Exception:
             continue
