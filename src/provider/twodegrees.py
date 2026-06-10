@@ -144,7 +144,7 @@ def extract_offer_text(offer):
 
 
 def extract_base_promo(feature):
-    # Pull promotion-like fragments from the plan feature text.
+    # Pull offer-like fragments that are not already mapped to structured fields.
     if not feature:
         return None
 
@@ -160,10 +160,33 @@ def extract_base_promo(feature):
 
         lower = part.lower()
 
+        if is_structured_promo_fragment(part):
+            continue
+
         if any(keyword in lower for keyword in keywords):
             promos.append(part)
 
     return " | ".join(promos) if promos else None
+
+
+def is_structured_promo_fragment(text):
+    if not text:
+        return False
+
+    lower = clean_text(text).lower()
+
+    structured_keywords = [
+        "modem",
+        "wi-fi",
+        "wifi",
+        "shipping fee",
+        "connection fee",
+        "open term",
+        "month term",
+        "byo",
+    ]
+
+    return any(keyword in lower for keyword in structured_keywords)
 
 
 def extract_contract_term_months(feature):
@@ -182,7 +205,7 @@ def extract_contract_term_months(feature):
         if "$" in lower:
             continue
 
-        match = re.search(r"(\d+)\s*month term only", lower)
+        match = re.search(r"(\d+)\s*month term", lower)
 
         if match:
             return int(match.group(1))
@@ -190,16 +213,56 @@ def extract_contract_term_months(feature):
     return None
 
 
-def extract_landline_allowed(features):
-    if not features:
-        return None
+def extract_minimum_contract_term_months(item, core_product_lookup):
+    terms = []
 
-    features_text = " ".join(features).lower()
+    for core_product_key in item.get("coreProducts", []):
+        product = core_product_lookup.get(core_product_key)
 
-    if "home phone line can be added" in features_text:
-        return True
+        if not product:
+            continue
+
+        for component in product.get("coreProductComponents", []):
+            for plan in component.get("coreProductComponentPlans", []):
+                term = plan.get("minimumContractTerm")
+
+                if term is not None and int(term) > 0:
+                    terms.append(int(term))
+
+    return min(terms) if terms else None
+
+
+def extract_contract_type(feature, open_term_connection_fee):
+    lower = feature.lower() if feature else ""
+
+    if "open & 12 month term available" in lower:
+        return "open_or_fixed"
+
+    if extract_contract_term_months(feature):
+        return "fixed"
+
+    if open_term_connection_fee is not None or "open term" in lower:
+        return "open"
 
     return None
+
+
+def extract_contract_condition_text(feature, contract_type, contract_term_months):
+    parts = []
+
+    if feature:
+        for part in feature.split("|"):
+            clean_part = clean_text(part)
+
+            if not clean_part:
+                continue
+
+            lower = clean_part.lower()
+
+            if "term" in lower and "$" not in lower:
+                parts.append(clean_part)
+
+    return " | ".join(dict.fromkeys(parts)) if parts else None
 
 
 def extract_antenna_required(feature):
@@ -231,6 +294,66 @@ def extract_shipping_fee(text):
     return int(amount) if amount.is_integer() else amount
 
 
+def extract_mobile_bundle_saving_amount(text):
+    if not text:
+        return None
+
+    lower = text.lower()
+
+    if "mobile" not in lower or "broadband" not in lower:
+        return None
+
+    match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)\s*/?\s*m", text, re.I)
+
+    if not match:
+        return None
+
+    amount = float(match.group(1))
+
+    return int(amount) if amount.is_integer() else amount
+
+
+def extract_mobile_bundle_condition_text(text):
+    if not text:
+        return None
+
+    for part in text.split("|"):
+        clean_part = clean_text(part)
+
+        if not clean_part:
+            continue
+
+        lower = clean_part.lower()
+
+        if "mobile" in lower and "broadband" in lower:
+            return clean_part
+
+    return None
+
+
+def extract_data_allowance_from_feature(feature):
+    if not feature:
+        return None
+
+    parts = [clean_text(part) for part in feature.split("|")]
+
+    for part in parts:
+        if not part:
+            continue
+
+        match = re.search(r"\b(\d+(?:\.\d+)?)\s*gb\b[^|]*(?:data|cap)", part, re.I)
+
+        if match:
+            amount = float(match.group(1))
+            return int(amount) if amount.is_integer() else amount
+
+    for part in parts:
+        if part and re.search(r"\bunlimited\s+data\b", part, re.I):
+            return "Unlimited"
+
+    return None
+
+
 def build_core_product_lookup(products):
     # Index core products so plan-card core product keys can find detailed fees.
     lookup = {}
@@ -243,29 +366,6 @@ def build_core_product_lookup(products):
                 lookup[key] = product
 
     return lookup
-
-
-def extract_open_term_connection_fee_text(item, core_product_lookup):
-    # Open-term connection fees live in the products API as core product charges.
-    for core_product_key in item.get("coreProducts", []):
-        product = core_product_lookup.get(core_product_key)
-
-        if not product:
-            continue
-
-        for charge in product.get("coreProductCharges", []):
-            if charge.get("chargeType") != "OpenTermContract":
-                continue
-
-            amount = clean_money(charge.get("chargeIncludingGst"))
-            description = clean_text(charge.get("billingDescription"))
-
-            if amount is None or not description:
-                continue
-
-            return f"Open term {description}: ${amount}"
-
-    return None
 
 
 def get_hardware_for_plan(item, hardware_by_core_product):
@@ -288,42 +388,208 @@ def get_hardware_for_plan(item, hardware_by_core_product):
     return hardware
 
 
-def extract_catalog_modem_promo_texts(item, hardware_by_core_product):
-    # Extract customer-facing hardware purchase text from catalog hardware data.
-    promos = []
-    hardware = get_hardware_for_plan(item, hardware_by_core_product)
+def get_hardware_contract_ranges(product):
+    ranges = set()
 
-    for product in hardware:
-        price = clean_money(product.get("rrpIncludingGst"))
-        description = clean_text(product.get("hardwareProductDescription"))
+    for availability in product.get("hardwareAvailableTo", []):
+        for pricing in availability.get("contractPricing", []):
+            min_term = pricing.get("coreProductMinContractLength")
+            max_term = pricing.get("coreProductMaxContractLength")
 
-        if (
-            product.get("purchaseType") == "Sales"
-            and product.get("hardwareProductType") in {"Router", "WbbModem"}
-            and price
-            and description
-        ):
-            promos.append(f"{description}: ${price}")
-            break
+            if min_term is None or max_term is None:
+                continue
 
-    return promos
+            ranges.add((int(min_term), int(max_term)))
+
+    return sorted(ranges)
 
 
-def extract_modem_option_text(feature):
-    # Plan-card features already include modem rental/BYO text.
-    if not feature:
+def merge_contract_ranges(ranges):
+    if not ranges:
+        return []
+
+    merged = []
+
+    for min_term, max_term in sorted(ranges):
+        if not merged or min_term > merged[-1][1] + 1:
+            merged.append([min_term, max_term])
+            continue
+
+        merged[-1][1] = max(merged[-1][1], max_term)
+
+    return [(min_term, max_term) for min_term, max_term in merged]
+
+
+def format_contract_range(min_term, max_term):
+    if min_term == 0 and max_term >= 99:
+        return "open term and fixed terms"
+
+    if min_term == 0:
+        return "open term"
+
+    if max_term >= 99:
+        return f"{min_term}+ month terms"
+
+    if min_term == max_term:
+        return f"{min_term} month term"
+
+    return f"{min_term}-{max_term} month terms"
+
+
+def extract_hardware_contract_condition(product):
+    ranges = merge_contract_ranges(get_hardware_contract_ranges(product))
+
+    if not ranges:
         return None
 
-    modem_parts = [
+    formatted = [format_contract_range(min_term, max_term) for min_term, max_term in ranges]
+    unique_formatted = list(dict.fromkeys(formatted))
+
+    return "available on " + ", ".join(unique_formatted)
+
+
+def extract_hardware_purchase_price(product):
+    prices = []
+
+    for availability in product.get("hardwareAvailableTo", []):
+        for pricing in availability.get("contractPricing", []):
+            amount = clean_money(pricing.get("chargeIncludingGst"))
+
+            if amount is not None:
+                prices.append(amount)
+
+    unique_prices = list(dict.fromkeys(prices))
+
+    if len(unique_prices) == 1:
+        return unique_prices[0]
+
+    return clean_money(product.get("rrpIncludingGst"))
+
+
+def extract_hardware_rental_price(product):
+    prices = []
+
+    for availability in product.get("hardwareAvailableTo", []):
+        for pricing in availability.get("contractPricing", []):
+            for rental_charge in pricing.get("rentalCharges", []):
+                if rental_charge.get("billFrequency") != "Monthly":
+                    continue
+
+                amount = clean_money(rental_charge.get("chargeIncludingGst"))
+
+                if amount is not None:
+                    prices.append(amount)
+
+    unique_prices = list(dict.fromkeys(prices))
+
+    if len(unique_prices) == 1:
+        return unique_prices[0]
+
+    return None
+
+
+def extract_open_term_connection_fee(item, core_product_lookup):
+    # Open-term connection fees live in the products API as core product charges.
+    for core_product_key in item.get("coreProducts", []):
+        product = core_product_lookup.get(core_product_key)
+
+        if not product:
+            continue
+
+        for charge in product.get("coreProductCharges", []):
+            if charge.get("chargeType") == "OpenTermContract":
+                return clean_money(charge.get("chargeIncludingGst"))
+
+    return None
+
+
+def extract_modem_details_from_feature(feature):
+    if not feature:
+        return {}
+
+    lower = feature.lower()
+    details = {}
+
+    if "byo modem" in lower:
+        details["byo_modem_allowed"] = True
+
+    if "free modem rental" in lower or "free tp-link hyperfibre modem rental" in lower:
+        details["modem_rental_available"] = True
+        details["modem_rental_price"] = 0
+        details["modem_rental_billing_frequency"] = "Monthly"
+
+    rental_match = re.search(
+        r"rent(?:\s+a|\s+an|\s+one)?[^|]*?\$\s*(\d+(?:\.\d{1,2})?)\s*/\s*month",
+        feature,
+        re.I,
+    )
+
+    if rental_match:
+        amount = float(rental_match.group(1))
+        details["modem_rental_available"] = True
+        details["modem_rental_price"] = int(amount) if amount.is_integer() else amount
+        details["modem_rental_billing_frequency"] = "Monthly"
+
+    modem_condition_parts = [
         clean_text(part)
         for part in feature.split("|")
         if "modem" in part.lower() or "wi-fi" in part.lower() or "wifi" in part.lower()
     ]
 
-    if not modem_parts:
-        return None
+    modem_condition_parts = [part for part in modem_condition_parts if part]
 
-    return " | ".join(modem_parts)
+    if modem_condition_parts:
+        rental_condition_parts = [
+            part
+            for part in modem_condition_parts
+            if "rental" in part.lower() or "rent" in part.lower()
+        ]
+
+        if rental_condition_parts:
+            cleaned_rental_parts = []
+
+            for part in rental_condition_parts:
+                lower = part.lower()
+
+                clean_part = re.sub(r"\s*\(\$\s*\d+(?:\.\d{1,2})?\s*shipping fee\)", "", part, flags=re.I)
+                clean_part = re.sub(r"\s+", " ", clean_part).strip()
+
+                if clean_part:
+                    cleaned_rental_parts.append(clean_part)
+
+            if cleaned_rental_parts:
+                details["modem_rental_condition_text"] = " | ".join(dict.fromkeys(cleaned_rental_parts))
+
+    return details
+
+
+def extract_catalog_modem_details(item, hardware_by_core_product, contract_type=None, contract_term_months=None):
+    details = {}
+    hardware = get_hardware_for_plan(item, hardware_by_core_product)
+
+    for product in hardware:
+        if product.get("hardwareProductType") not in {"Router", "WbbModem", "Wireless Broadband Modem"}:
+            continue
+
+        condition = extract_hardware_contract_condition(product)
+
+        if product.get("purchaseType") == "Rental" and "modem_rental_available" not in details:
+            price = extract_hardware_rental_price(product)
+
+            if price is not None:
+                details["modem_rental_available"] = True
+                details["modem_rental_price"] = price
+                details["modem_rental_billing_frequency"] = "Monthly"
+                details["modem_rental_condition_text"] = condition
+
+        if product.get("purchaseType") == "Sales" and "modem_purchase_available" not in details:
+            price = extract_hardware_purchase_price(product)
+
+            if price is not None:
+                details["modem_purchase_available"] = True
+                details["modem_purchase_price"] = price
+
+    return details
 
 
 def fibre_offer_applies(plan, offer):
@@ -466,27 +732,32 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
             if text:
                 matched_promos.append(text)
 
-        modem_option_text = extract_modem_option_text(feature)
-        extracted_promo_texts = []
+        open_term_connection_fee = extract_open_term_connection_fee(item, core_product_lookup)
 
-        if modem_option_text:
-            extracted_promo_texts.append(modem_option_text)
+        contract_term_months = (
+            extract_contract_term_months(feature)
+            or extract_minimum_contract_term_months(item, core_product_lookup)
+        )
+        contract_type = extract_contract_type(feature, open_term_connection_fee)
 
-        open_term_connection_fee_text = extract_open_term_connection_fee_text(
+        if contract_term_months and contract_type is None:
+            contract_type = "fixed"
+
+        catalog_modem_details = extract_catalog_modem_details(
             item,
-            core_product_lookup,
+            hardware_by_core_product,
+            contract_type,
+            contract_term_months,
         )
-        if open_term_connection_fee_text:
-            extracted_promo_texts.append(open_term_connection_fee_text)
-
-        extracted_promo_texts.extend(
-            extract_catalog_modem_promo_texts(item, hardware_by_core_product)
-        )
+        modem_details = catalog_modem_details
+        modem_details.update(extract_modem_details_from_feature(feature))
 
         promo_text = merge_promotions(
             base_promo,
-            matched_promos + extracted_promo_texts,
+            matched_promos,
         )
+        mobile_bundle_saving_amount = extract_mobile_bundle_saving_amount(promo_text)
+        mobile_bundle_condition_text = extract_mobile_bundle_condition_text(promo_text)
 
         result.append({
             "provider": "2degrees",
@@ -495,18 +766,38 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
                 item.get("serviceType"),
                 item.get("title"),
             ),
-            "monthly_price": None,
-            "original_price": item.get("rrp"),
+            "price": item.get("rrp"),
+            "billing_frequency": "Monthly",
             "promotion_text": promo_text,
-            "data_allowance": item.get("dataEntitlement"),
+            "data_allowance": extract_data_allowance_from_feature(feature) or item.get("dataEntitlement"),
             "speed_down_mbps": item.get("downSpeed"),
             "speed_up_mbps": item.get("upSpeed"),
-            "contract_term_months": extract_contract_term_months(feature),
-            "landline_allowed": extract_landline_allowed(features),
+            "contract_term_months": contract_term_months,
+            "contract_type": contract_type,
+            "contract_condition_text": extract_contract_condition_text(
+                feature,
+                contract_type,
+                contract_term_months,
+            ),
+            "open_term_connection_fee": open_term_connection_fee,
+            "fixed_term_connection_fee": None,
+            "shipping_fee": extract_shipping_fee(feature),
+            "mobile_bundle_available": mobile_bundle_saving_amount is not None,
+            "mobile_bundle_saving_amount": mobile_bundle_saving_amount,
+            "bundle_condition_text": mobile_bundle_condition_text,
+            "byo_modem_allowed": modem_details.get("byo_modem_allowed"),
+            "modem_rental_available": modem_details.get("modem_rental_available"),
+            "modem_rental_price": modem_details.get("modem_rental_price"),
+            "modem_rental_billing_frequency": modem_details.get("modem_rental_billing_frequency"),
+            "modem_rental_condition_text": modem_details.get("modem_rental_condition_text"),
+            "modem_purchase_available": modem_details.get("modem_purchase_available"),
+            "modem_purchase_price": modem_details.get("modem_purchase_price"),
+            "modem_purchase_condition_text": modem_details.get("modem_purchase_condition_text"),
             "antenna_required": extract_antenna_required(feature),
             "data_source": "API",
             "source_url": "https://www.2degrees.nz/broadband/plans?discount=yes",
             "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "raw_offer_text": " | ".join(filter(None, [feature, *matched_promos])),
         })
 
     return result
@@ -524,17 +815,37 @@ def get_twodegrees_plans():
             provider=p["provider"],
             plan_name=p["plan_name"],
             connection_type=p["connection_type"],
-            original_price=p["original_price"],
-            promotion_text=p["promotion_text"],
+            price=p["price"],
+            billing_frequency=p["billing_frequency"],
             data_allowance=p["data_allowance"],
             speed_down_mbps=p["speed_down_mbps"],
             speed_up_mbps=p["speed_up_mbps"],
+            contract_type=p["contract_type"],
             contract_term_months=p["contract_term_months"],
-            landline_allowed=p["landline_allowed"],
+            contract_condition_text=p["contract_condition_text"],
+            open_term_connection_fee=p["open_term_connection_fee"],
+            fixed_term_connection_fee=p["fixed_term_connection_fee"],
+            shipping_fee=p["shipping_fee"],
+            mobile_bundle_available=p["mobile_bundle_available"],
+            mobile_bundle_saving_amount=p["mobile_bundle_saving_amount"],
+            power_bundle_available=p.get("power_bundle_available"),
+            power_bundle_saving_amount=p.get("power_bundle_saving_amount"),
+            power_bundle_saving_pct=p.get("power_bundle_saving_pct"),
+            bundle_condition_text=p["bundle_condition_text"],
+            byo_modem_allowed=p["byo_modem_allowed"],
+            modem_rental_available=p["modem_rental_available"],
+            modem_rental_price=p["modem_rental_price"],
+            modem_rental_billing_frequency=p["modem_rental_billing_frequency"],
+            modem_rental_condition_text=p["modem_rental_condition_text"],
+            modem_purchase_available=p["modem_purchase_available"],
+            modem_purchase_price=p["modem_purchase_price"],
+            modem_purchase_condition_text=p["modem_purchase_condition_text"],
             antenna_required=p["antenna_required"],
             data_source=p["data_source"],
             source_url=p["source_url"],
-            collected_at=p["collected_at"]
+            collected_at=p["collected_at"],
+            promotion_text=p["promotion_text"],
+            raw_offer_text=p["raw_offer_text"]
         )
 
         standardized.append(plan)

@@ -1,90 +1,48 @@
-"""
-Main application entry point for the broadband comparison prototype.
-
-This script runs each provider-specific extractor and prints the standardised
-broadband plan records returned by those modules.
-"""
-
+from datetime import datetime
 from provider.twodegrees import get_twodegrees_plans
-from provider.skinny import get_skinny_plans
-from provider.mercury import get_mercury_plans
-from provider.contact import get_contact_plans
-from provider.genesis import get_genesis_plans
+# from provider.skinny import get_skinny_plans
+# from provider.mercury import get_mercury_plans
+# from provider.contact import get_contact_plans
+# from provider.genesis import get_genesis_plans
 from provider.zeronet import get_zeronet_plans
 from provider.one import get_one_plans
-from provider.sky import get_sky_plans
+# from provider.sky import get_sky_plans
 from provider.spark import get_spark_plans
-from provider.electrickiwi import get_electrickiwi_plans
-from provider.wirelessnation import get_wirelessnation_plans
+# from provider.electrickiwi import get_electrickiwi_plans
+# from provider.wirelessnation import get_wirelessnation_plans
+
+
+ACTIVE_PROVIDERS = [
+    ("2degrees", get_twodegrees_plans),
+    ("One", get_one_plans),
+    ("Spark", get_spark_plans),
+    ("Zeronet", get_zeronet_plans),
+    # ("Skinny", get_skinny_plans),
+    # ("Mercury", get_mercury_plans),
+    # ("Contact", get_contact_plans),
+    # ("Genesis", get_genesis_plans),
+    # ("Sky", get_sky_plans),
+    # ("Electric Kiwi", get_electrickiwi_plans),
+    # ("Wireless Nation", get_wirelessnation_plans),
+]
+
+
+def print_plan(plan):
+    display_plan = {
+        key: value
+        for key, value in plan.items()
+        if key != "raw_offer_text"
+    }
+    print(display_plan)
+    print("\n")
+
 
 def main():
-    standardized_twodegrees_plans = get_twodegrees_plans()
-    standardized_one_plans = get_one_plans()
-    standardized_mercury_plans = get_mercury_plans()
-    contact_plans = get_contact_plans()
-    genesis_plans = get_genesis_plans()
-    zeronet_plans = get_zeronet_plans()
-    standardized_skinny_plans = get_skinny_plans()  
-    standardized_sky_plans = get_sky_plans()
-    standardized_spark_plans = get_spark_plans()
-    electrickiwi_plans = get_electrickiwi_plans()
-    wirelessnation_plans = get_wirelessnation_plans()
+    for provider_name, fetch_plans in ACTIVE_PROVIDERS:
+        print(f"{provider_name} Plan:\n")
 
-
-    print("2degrees Plan: \n")
-    for plan in standardized_twodegrees_plans:
-        print(plan)
-        print("\n")
-
-    print("One Plan: \n")
-    for plan in standardized_one_plans:
-        print(plan)
-        print("\n")
-
-    print("Spark Plan: \n")
-    for plan in standardized_spark_plans:
-        print(plan)
-        print("\n")
-
-    print("Skinny Plan: \n")
-    for plan in standardized_skinny_plans:
-        print(plan)
-        print("\n")
-        
-    print("Mercury Plan: \n")
-    for plan in standardized_mercury_plans:
-        print(plan)
-        print("\n")    
-
-    print("Contact Plan:\n")
-    for plan in contact_plans:
-        print(plan)
-        print("\n")
-
-    print("Genesis Plan:\n")
-    for plan in genesis_plans:
-        print(plan)
-        print("\n")
-    
-    print("Sky Plans:\n")
-    for plan in standardized_sky_plans:
-        print(plan)
-        print("\n")
-        
-    print("Zeronet Plan:\n")
-    for plan in zeronet_plans:
-        print(plan)
-        print("\n")
-    
-    print("Electric Kiwi Plans:\n")
-    for plan in electrickiwi_plans:
-        print(plan)
-        print("\n")
-
-    print("Wireless Nation Plans:\n")
-    for plan in wirelessnation_plans:
-        print(plan)
-        print("\n")
+        for plan in fetch_plans():
+            print_plan(plan)
 
         
 if __name__ == "__main__":
