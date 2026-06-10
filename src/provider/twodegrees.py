@@ -235,13 +235,19 @@ def extract_minimum_contract_term_months(item, core_product_lookup):
 def extract_contract_type(feature, open_term_connection_fee):
     lower = feature.lower() if feature else ""
 
-    if "open & 12 month term available" in lower:
+    has_open_term = (
+        open_term_connection_fee is not None
+        or re.search(r"\bopen\b.*\bterm\b.*\bavailable\b", lower) is not None
+    )
+    has_fixed_term = extract_contract_term_months(feature) is not None
+
+    if has_open_term and has_fixed_term:
         return "open_or_fixed"
 
-    if extract_contract_term_months(feature):
+    if has_fixed_term:
         return "fixed"
 
-    if open_term_connection_fee is not None or "open term" in lower:
+    if has_open_term:
         return "open"
 
     return None
@@ -271,10 +277,13 @@ def extract_antenna_required(feature):
 
     lower = feature.lower()
 
-    if "no installation required" in lower:
+    if re.search(r"\bno\b.*\b(antenna|installation)\b.*\brequired\b", lower):
         return False
 
-    if "antenna required" in lower:
+    if re.search(r"\b(antenna|installation)\b.*\bnot\b.*\brequired\b", lower):
+        return False
+
+    if re.search(r"\bantenna\b.*\b(is\s+)?required\b", lower):
         return True
 
     return None
