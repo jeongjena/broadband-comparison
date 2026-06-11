@@ -1,15 +1,27 @@
+"""
+Contact Broadband API Extractor
+
+Contributor: Markus Salvador (23203124)
+Version: 0.4
+Last Updated: 2026-06-12
+
+Retrieves broadband plan information from the Contact API and
+transforms the results into the project's standardised format.
+"""
+
 import requests
 import re
+import traceback
 from datetime import datetime
 from processing.standardizer import standardize_plans
 
 # NOTE: API KEY IS HARDCODED FOR PROOF OF CONCEPT PURPOSES ONLY.
 API_KEY = "j4ukhbwyZPr6w7KVEd5k1KpfzW2Y6dI5dpOnstca"
 
-plans_url = "https://api.contact-digital-prod.net/plans?journey=Join&type=RESI"
-final_url = "https://api.contact-digital-prod.net/devoli/v2/provide-address/plans"
+PLANS_URL = "https://api.contact-digital-prod.net/plans?journey=Join&type=RESI"
+FINAL_URL = "https://api.contact-digital-prod.net/devoli/v2/provide-address/plans"
 
-common_headers = {
+COMMON_HEADERS = {
     "accept": "application/json, text/plain, */*",
     "origin": "https://journey.contact.co.nz",
     "referer": "https://journey.contact.co.nz/",
@@ -17,10 +29,20 @@ common_headers = {
     "x-api-key": API_KEY
 }
 
+
 def fetch_contact_plans():
+    """
+    Retrieve broadband offerings from the Contact API.
+
+    The extractor first retrieves available plans and services,
+    then submits them to the plan availability endpoint to obtain
+    the final broadband offerings exposed to customers.
+    """
+
     session = requests.Session()
 
-    r1 = session.get(plans_url, headers=common_headers)
+    r1 = session.get(PLANS_URL, headers=COMMON_HEADERS)
+    r1.raise_for_status()
     data = r1.json()
 
     plans = data.get("Plans", [])
@@ -41,11 +63,12 @@ def fetch_contact_plans():
     }
 
     headers = {
-        **common_headers,
+        **COMMON_HEADERS,
         "content-type": "application/json"
     }
 
-    r2 = session.post(final_url, headers=headers, json=payload)
+    r2 = session.post(FINAL_URL, headers=headers, json=payload)
+    r2.raise_for_status()   
     result = r2.json()
 
     if isinstance(result, dict):
@@ -53,37 +76,56 @@ def fetch_contact_plans():
     else:
         data_list = result
 
-    all_plans = []
+    all_plans = [
+        offering
+        for item in data_list
+        if isinstance(item, dict)
+        for offering in item.get("offerings", [])
+    ]
 
-    for item in data_list:
-        if isinstance(item, dict):
-            for offering in item.get("offerings", []):
-                all_plans.append(offering)
+    return all_plans
 
-    return all_plans, []
 
 def extract_speed(value):
+    """
+    Extract the numeric component from Contact speed labels.
+    """
+
     if not value:
         return None
+
     match = re.search(r"\d+", value)
+
     return int(match.group()) if match else None
 
-def clean_contact_plans(plans, _):
+
+def clean_contact_plans(plans):
+    """
+    Convert raw Contact API offerings into the project's
+    intermediate schema prior to standardisation.
+    """
+
     cleaned_plans = []
     seen = set() # to track duplicates based on (plan name, speed)
 
     for item in plans:
         price_str = item.get("BundlePrice", "")
-        #price = float(price_str.replace("$", "").replace("/mth", "")) if price_str else None
 
-        monthly_price = (
+        price = (
             float(price_str.replace("$", "").replace("/mth", ""))
             if price_str else None
         )
 
         down = extract_speed(item.get("DownloadSpeed", ""))
         up = extract_speed(item.get("UploadSpeed", ""))
-        key = (item.get("Name"), down)
+        key = (
+            item.get("Name"),
+            item.get("Type"),
+            down,
+            up
+        )
+
+        is_wireless = item.get("Type") == "FixedWireless"
 
         if key in seen:
             continue
@@ -93,18 +135,31 @@ def clean_contact_plans(plans, _):
             "title": item.get("Name"),
             "serviceType": (
                 "Wireless"
-                if item.get("Type") == "FixedWireless" 
+                if is_wireless
                 else item.get("Type")
             ),
-            "monthlyPrice": monthly_price,
+            "price": price,
+            "billingFrequency": "Monthly",
             "rrp": None,
             "dataEntitlement": item.get("DataCapDesc"),
             "downSpeed": down,
             "upSpeed": up,
-            "promotionText": item.get("Label") or None,  
+            "promotionText": item.get("Label") or None,
             "contractTermMonths": None,
-            "landlineAllowed": None,
-            "antennaRequired": item.get("Type") == "FixedWireless"
+
+            # Bundle information
+            "powerBundleAvailable": True,
+            "powerBundleSavingAmount": 5,
+            "gasBundleAvailable": True,
+            "gasBundleSavingAmount": 10,
+
+            # Modem information
+            "byoModemAllowed": not is_wireless,
+            "modemRentalAvailable": True,
+            "modemPurchaseAvailable": True,
+
+            # Wireless specific
+            "antennaRequired": is_wireless
         }
 
         cleaned_plans.append(cleaned_plan)
@@ -113,30 +168,53 @@ def clean_contact_plans(plans, _):
 
 
 def get_contact_plans():
-    plans, _ = fetch_contact_plans()
-    cleaned = clean_contact_plans(plans, _)
+    """
+    Main entry point used by the project aggregator.
+    """
+    try: 
+        plans = fetch_contact_plans()
+        print("RAW:", len(plans))        
 
-    standardized = []
+        cleaned = clean_contact_plans(plans)
+        print("CLEANED:", len(cleaned))
 
-    for plan in cleaned:
-        standardized.append(
-            standardize_plans(
-                provider="Contact",
-                plan_name=plan.get("title"),
-                connection_type=plan.get("serviceType"),
-                monthly_price=plan.get("monthlyPrice"),
-                original_price=plan.get("rrp"),
-                data_allowance=plan.get("dataEntitlement"),
-                speed_down_mbps=plan.get("downSpeed"),
-                speed_up_mbps=plan.get("upSpeed"),
-                promotion_text=plan.get("promotionText"),
-                contract_term_months=plan.get("contractTermMonths"),
-                landline_allowed=plan.get("landlineAllowed"),
-                antenna_required=plan.get("antennaRequired"),
-                data_source="API",
-                source_url="https://www.contact.co.nz/broadband",
-                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(cleaned)
+
+        standardized = []
+
+        for plan in cleaned:
+            standardized.append(
+                standardize_plans(
+                    provider="Contact",
+                    plan_name=plan.get("title"),
+                    connection_type=plan.get("serviceType"),
+                    price=plan.get("price"),
+                    billing_frequency=plan.get("billingFrequency"),
+                    promotion_text=plan.get("promotionText"),
+                    data_allowance=plan.get("dataEntitlement"),
+                    speed_down_mbps=plan.get("downSpeed"),
+                    speed_up_mbps=plan.get("upSpeed"),
+                    contract_term_months=plan.get("contractTermMonths"),
+
+                    power_bundle_available=plan.get("powerBundleAvailable"),
+                    power_bundle_saving_amount=plan.get("powerBundleSavingAmount"),
+
+                    gas_bundle_available=plan.get("gasBundleAvailable"),
+                    gas_bundle_saving_amount=plan.get("gasBundleSavingAmount"),
+
+                    byo_modem_allowed=plan.get("byoModemAllowed"),
+                    modem_rental_available=plan.get("modemRentalAvailable"),
+                    modem_purchase_available=plan.get("modemPurchaseAvailable"),
+
+                    antenna_required=plan.get("antennaRequired"),
+
+                    data_source="API",
+                    source_url="https://www.contact.co.nz/broadband",
+                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
             )
-        )
-    
-    return standardized
+        return standardized
+    except Exception as e:
+        print(f"[ERROR] Contact failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return []
