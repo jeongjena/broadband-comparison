@@ -106,7 +106,7 @@ def clean_contact_plans(plans):
     """
 
     cleaned_plans = []
-    seen = set() # to track duplicates based on (plan name, speed)
+    seen = set() # Track duplicate plan variants. 
 
     for item in plans:
         price_str = item.get("BundlePrice", "")
@@ -173,13 +173,7 @@ def get_contact_plans():
     """
     try: 
         plans = fetch_contact_plans()
-        print("RAW:", len(plans))        
-
         cleaned = clean_contact_plans(plans)
-        print("CLEANED:", len(cleaned))
-
-        print(cleaned)
-
         standardized = []
 
         for plan in cleaned:
