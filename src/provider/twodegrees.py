@@ -3,7 +3,7 @@
 
 Contributor: Jena Jeong (23208300)
 Version: 0.5
-Last Updated: 2026-06-06
+Last Updated: 2026-06-14
 
 Retrieves broadband plan, promotion, product, and hardware data from
 2degrees catalog APIs and transforms the results into the project's
@@ -19,6 +19,8 @@ from processing.standardizer import standardize_plans
 
 
 BASE_URL = "https://api.2degrees.nz/sales/v3/catalog"
+DEFAULT_CONTRACT_TYPE = "open_or_fixed"
+DEFAULT_FIXED_TERM_MONTHS = 12
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -235,19 +237,22 @@ def extract_minimum_contract_term_months(item, core_product_lookup):
 def extract_contract_type(feature, open_term_connection_fee):
     lower = feature.lower() if feature else ""
 
-    has_open_term = (
-        open_term_connection_fee is not None
-        or re.search(r"\bopen\b.*\bterm\b.*\bavailable\b", lower) is not None
-    )
+    if re.search(r"\bopen\s+term\s+only\b", lower):
+        return "open"
+
+    if re.search(r"\b\d+\s*month\s+term\s+only\b", lower):
+        return "fixed"
+
+    has_open_term_text = re.search(r"\bopen\b.*\bterm\b", lower) is not None
     has_fixed_term = extract_contract_term_months(feature) is not None
 
-    if has_open_term and has_fixed_term:
+    if has_fixed_term and (has_open_term_text or open_term_connection_fee is not None):
         return "open_or_fixed"
 
     if has_fixed_term:
         return "fixed"
 
-    if has_open_term:
+    if has_open_term_text:
         return "open"
 
     return None
@@ -662,12 +667,6 @@ def get_promo_key(text):
     if "free modem rental" in lower:
         return "free_modem_rental"
 
-    if (
-        ("$5/m" in lower or "save $5" in lower or "5/m off" in lower)
-        and ("12 month" in lower or "12-month" in lower or "12 months" in lower)
-    ):
-        return "five_dollar_12_month_discount"
-
     if "prime video" in lower:
         return "prime_video"
 
@@ -677,6 +676,20 @@ def get_promo_key(text):
         and ("$10" in lower or "10/m" in lower)
     ):
         return "mobile_broadband_bundle_discount"
+
+    amount_match = re.search(
+        r"(?:save\s*)?\$?\s*(\d+(?:\.\d+)?)\s*(?:/\s*m|per\s+month|/\s*month)",
+        lower,
+    )
+    duration_match = re.search(r"\b(\d+)\s*-?\s*months?\b", lower)
+
+    if not amount_match and duration_match:
+        amount_match = re.search(r"\bsave\s+\$\s*(\d+(?:\.\d+)?)\b", lower)
+
+    if amount_match and duration_match:
+        amount = clean_money(amount_match.group(1))
+        months = int(duration_match.group(1))
+        return f"monthly_discount_{amount}_{months}_months"
 
     return lower
 
@@ -743,14 +756,24 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
 
         open_term_connection_fee = extract_open_term_connection_fee(item, core_product_lookup)
 
-        contract_term_months = (
-            extract_contract_term_months(feature)
-            or extract_minimum_contract_term_months(item, core_product_lookup)
+        feature_contract_term = extract_contract_term_months(feature)
+        catalog_contract_term = extract_minimum_contract_term_months(
+            item,
+            core_product_lookup,
         )
+        contract_term_months = feature_contract_term or catalog_contract_term
         contract_type = extract_contract_type(feature, open_term_connection_fee)
 
-        if contract_term_months and contract_type is None:
-            contract_type = "fixed"
+        # The consumer checkout defaults standard plans to a 12-month term
+        # while also offering open term when the plan has no explicit limit.
+        if contract_type is None:
+            if catalog_contract_term is not None:
+                contract_type = "fixed"
+            else:
+                contract_type = DEFAULT_CONTRACT_TYPE
+                contract_term_months = DEFAULT_FIXED_TERM_MONTHS
+        elif contract_type == "open":
+            contract_term_months = None
 
         catalog_modem_details = extract_catalog_modem_details(
             item,
