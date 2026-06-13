@@ -1,24 +1,20 @@
-# provider/mercury.py
-
 from datetime import datetime
 from pathlib import Path
 import re
 
 import requests
 from bs4 import BeautifulSoup
+
 from processing.standardizer import clean_text, standardize_plans
 
 
 URL = "https://www.mercury.co.nz/broadband?lcsp=SYC"
-
 RAW_DIR = Path("data/raw")
 RAW_PATH = RAW_DIR / "mercury.html"
 
 
 def fetch_mercury_plans():
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     response = requests.get(URL, headers=headers, timeout=20)
     response.raise_for_status()
@@ -47,14 +43,17 @@ def extract_speed(text):
     if not text:
         return None, None
 
+    # Normalize stray whitespace inside "Mbps" (e.g. "Mbp s" in Mercury HTML)
+    normalized = re.sub(r"Mbp\s+s", "Mbps", text, flags=re.IGNORECASE)
+
     match = re.search(
         r"Download\s*(\d+)\s*Mbps\s*/\s*Upload\s*(\d+)\s*Mbps",
-        text,
-        re.IGNORECASE
+        normalized,
+        re.IGNORECASE,
     )
 
     if match:
-        return int(match.group(1)), int(match.group(2))
+        return float(match.group(1)), float(match.group(2))
 
     return None, None
 
@@ -73,6 +72,8 @@ def extract_promotion_text(text):
         "router",
         "postage",
         "handling",
+        "half-price",
+        "half price",
     ]
 
     text = text.replace(" All ", ". All ")
@@ -106,13 +107,31 @@ def extract_contract_term_months(text):
 
     lower = text.lower()
 
-    if "no fixed term" in lower or "open term" in lower or "no term" in lower:
+    if "no fixed term" in lower or "no term" in lower:
         return 0
 
-    match = re.search(r"(\d+)\s*month", lower)
+    # Only match "open term" when it's describing this plan's contract,
+    # not when it appears inside phrases like "open term fibre plans"
+    if re.search(r"\bopen\s+term\b(?!\s+(?:fibre|broadband|plan))", lower):
+        return 0
+
+    # Strip "12 months half-price" — it refers to a bundle promo period,
+    # not the plan's own contract term
+    lower_clean = re.sub(r"\d+\s*months?\s+half.?price", "", lower)
+    match = re.search(r"(\d+)\s*month", lower_clean)
 
     if match:
         return int(match.group(1))
+
+    return None
+
+
+def infer_contract_type(contract_term_months):
+    if contract_term_months == 0:
+        return "open"
+
+    if contract_term_months:
+        return "fixed"
 
     return None
 
@@ -128,6 +147,8 @@ def extract_bundle_text(text):
         "electricity",
         "gas",
         "mobile",
+        "half-price",
+        "samsung",
     ]
 
     parts = re.split(r"\.|\n|\|", text)
@@ -144,6 +165,12 @@ def extract_bundle_text(text):
         if "offer summaries" in lower:
             continue
 
+        # Skip general marketing sentences that aren't bundle conditions
+        if any(phrase in lower for phrase in [
+            "free power day", "one bill", "earning rewards points", "one easy bill"
+        ]):
+            continue
+
         if any(keyword in lower for keyword in bundle_keywords):
             matched.append(cleaned_part)
 
@@ -152,58 +179,105 @@ def extract_bundle_text(text):
     return " | ".join(matched) if matched else None
 
 
-def infer_plan_name(monthly_price, feature_text):
+def extract_bundle_saving_pct(text):
+    """Extracts bundle saving percentage, e.g. 'half-price' → 50."""
+    if not text:
+        return None
+
+    lower = text.lower()
+
+    if "half-price" in lower or "half price" in lower:
+        return 50
+
+    match = re.search(r"(\d+)\s*%\s*off", lower)
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def extract_bundle_saving_amount(text):
+    """Extracts dollar saving amount from bundle text, e.g. 'save $10' → 10.0."""
+    if not text:
+        return None
+
+    match = re.search(r"save\s*\$?(\d+(?:\.\d{1,2})?)", text.lower())
+
+    if match:
+        return float(match.group(1))
+
+    return None
+
+
+def infer_connection_type_from_text(feature_text):
+    """
+    Mercury-specific connection type inference.
+    Wireless plans explicitly mention 'wireless'; everything else is Fibre.
+    The standardizer's infer_connection_type is not used here because Mercury's
+    fibre plan cards don't repeat the word 'fibre' in their feature text.
+    """
     lower = feature_text.lower() if feature_text else ""
 
-    if "download 106" in lower:
-        return "Fibre Lite"
-
-    if "download 514" in lower:
-        return "Fibre Classic"
-
-    if "download 904" in lower:
-        return "Fibre Max"
-
-    if "download 62" in lower and monthly_price == 69:
-        return "Wireless 120GB"
-
-    if "download 62" in lower and monthly_price == 74:
-        return "Wireless 300GB"
-
-    if "download 62" in lower and monthly_price == 79:
-        return "Wireless 1000GB"
-
-    return "Mercury Broadband Plan"
-
-
-def infer_connection_type(feature_text):
-    lower = feature_text.lower() if feature_text else ""
-
-    if "wireless" in lower or "120gb" in lower or "300gb" in lower or "1000gb" in lower:
+    if "wireless" in lower:
         return "Wireless"
 
     return "Fibre"
 
 
-def infer_data_allowance(plan_name, connection_type, feature_text):
+# Fallback mapping for wireless plans whose feature text omits data allowance
+WIRELESS_PRICE_TO_ALLOWANCE = {
+    69.0: "120GB",
+    74.0: "300GB",
+    79.0: "1000GB",
+}
+
+
+def infer_data_allowance(connection_type, feature_text, price=None):
     lower = feature_text.lower() if feature_text else ""
 
-    if "120gb" in lower or "120gb" in plan_name.lower():
+    if "120gb" in lower:
         return "120GB"
 
-    if "300gb" in lower or "300gb" in plan_name.lower():
+    if "300gb" in lower:
         return "300GB"
 
-    if "1000gb" in lower or "1,000gb" in lower or "1000gb" in plan_name.lower():
+    if "1,000gb" in lower or "1000gb" in lower:
         return "1000GB"
 
-    if "unlimited" in lower:
+    if "unlimited" in lower or connection_type == "Fibre":
         return "Unlimited"
 
-    if connection_type == "Fibre":
-        return "Unlimited"
+    # Feature text doesn't include data allowance for wireless plans — use price
+    if connection_type == "Wireless" and price:
+        return WIRELESS_PRICE_TO_ALLOWANCE.get(price)
 
     return None
+
+
+def infer_plan_name(connection_type, speed_down, data_allowance):
+    """
+    Infers plan name from connection type and speed range.
+    Speed-based ranges are used instead of exact values to avoid
+    breakage when MBNZ report updates shift the reported averages.
+    """
+    if connection_type == "Wireless":
+        if data_allowance == "120GB":
+            return "Wireless 120GB"
+        if data_allowance == "300GB":
+            return "Wireless 300GB"
+        if data_allowance == "1000GB":
+            return "Wireless 1000GB"
+        return "Mercury Wireless Broadband"
+
+    if speed_down is not None:
+        if speed_down < 200:
+            return "Fibre Lite"
+        if speed_down < 700:
+            return "Fibre Classic"
+        return "Fibre Max"
+
+    return "Mercury Broadband Plan"
 
 
 def clean_mercury_plans(html):
@@ -228,42 +302,90 @@ def clean_mercury_plans(html):
         if "$" not in price_text or "month" not in price_text.lower():
             continue
 
-        raw_feature_text = (
+        feature_text = (
             clean_text(intro_element.get_text(" ", strip=True))
             if intro_element
             else None
         )
 
-        monthly_price = extract_price_number(price_text)
-        speed_down, speed_up = extract_speed(raw_feature_text)
+        price = extract_price_number(price_text)
+        speed_down, speed_up = extract_speed(feature_text)
 
-        connection_type = infer_connection_type(raw_feature_text)
-        plan_name = infer_plan_name(monthly_price, raw_feature_text)
-        data_allowance = infer_data_allowance(plan_name, connection_type, raw_feature_text)
+        connection_type = infer_connection_type_from_text(feature_text)
+        data_allowance = infer_data_allowance(connection_type, feature_text, price)
+        plan_name = infer_plan_name(connection_type, speed_down, data_allowance)
 
-        promotion_text = extract_promotion_text(raw_feature_text)
-        contract_term_months = extract_contract_term_months(raw_feature_text)
-        bundle_text = extract_bundle_text(raw_feature_text)
+        promotion_text = extract_promotion_text(feature_text)
+        contract_term_months = extract_contract_term_months(feature_text)
+        contract_type = infer_contract_type(contract_term_months)
+        bundle_text = extract_bundle_text(feature_text)
 
-        cleaned_plans.append({
-            "title": plan_name,
-            "serviceType": connection_type,
-            "monthlyPrice": monthly_price,
-            "rrp": None,
-            "promotionText": promotion_text,
-            "bundle": bundle_text,
-            "dataEntitlement": data_allowance,
-            "downSpeed": speed_down,
-            "upSpeed": speed_up,
-            "contractTermMonths": contract_term_months,
-            "landlineAllowed": None,
-            "antennaRequired": False if connection_type == "Fibre" else None,
-            "queriedAddress": None,
-            "dataSource": "STATIC_HTML",
-            "sourceUrl": URL,
-            "collectedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "priceText": price_text,
-        })
+        # Mercury is an energy company — power and gas bundles are always available.
+        # Saving amounts/pct are bundle-level offers, not extractable per plan card.
+        power_bundle_saving_amount = extract_bundle_saving_amount(feature_text)
+
+        # Wireless: free router rental + $14.95 P&H
+        # Fibre: eero routers available for purchase + $14.95 P&H
+        modem_rental_available = True if connection_type == "Wireless" else None
+        modem_rental_price = 0.0 if connection_type == "Wireless" else None
+        modem_rental_condition_text = (
+            "Free router rental. $14.95 postage and handling fee applies. "
+            "Router must be returned within 14 days of cancellation."
+            if connection_type == "Wireless"
+            else None
+        )
+
+        modem_purchase_available = True if connection_type == "Fibre" else None
+        modem_purchase_condition_text = (
+            "eero 6+ routers available. $14.95 postage and handling fee applies."
+            if connection_type == "Fibre"
+            else None
+        )
+
+        raw_offer_text = " | ".join(
+            filter(None, [price_text, feature_text, promotion_text, bundle_text])
+        )
+
+        cleaned_plans.append(
+            {
+                "plan_name": plan_name,
+                "connection_type": connection_type,
+                "price": price,
+                "billing_frequency": "Monthly",
+                "data_allowance": data_allowance,
+                "speed_down_mbps": speed_down,
+                "speed_up_mbps": speed_up,
+                "promo_price": None,
+                "promo_period": None,
+                "promo_period_unit": None,
+                "contract_type": contract_type,
+                "contract_term_months": contract_term_months,
+                "contract_condition_text": feature_text,
+                "power_bundle_available": True,
+                "power_bundle_saving_amount": power_bundle_saving_amount,
+                "power_bundle_saving_pct": None,
+                "gas_bundle_available": True,
+                "gas_bundle_saving_amount": None,
+                "mobile_bundle_available": True,
+                "mobile_bundle_saving_amount": None,
+                "bundle_condition_text": bundle_text,
+                "byo_modem_allowed": None,
+                "modem_rental_available": modem_rental_available,
+                "modem_rental_price": modem_rental_price,
+                "modem_rental_billing_frequency": "Monthly" if modem_rental_available else None,
+                "modem_rental_condition_text": modem_rental_condition_text,
+                "modem_purchase_available": modem_purchase_available,
+                "modem_purchase_price": None,
+                "modem_purchase_condition_text": modem_purchase_condition_text,
+                "antenna_required": False if connection_type == "Fibre" else None,
+                "shipping_fee": 14.95,
+                "data_source": "STATIC_HTML",
+                "source_url": URL,
+                "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "promotion_text": promotion_text,
+                "raw_offer_text": raw_offer_text,
+            }
+        )
 
     print(f"[INFO] Mercury extracted {len(cleaned_plans)} rows.")
     return cleaned_plans
@@ -280,22 +402,58 @@ def get_mercury_plans():
             standardized_plans.append(
                 standardize_plans(
                     provider="Mercury",
-                    plan_name=plan.get("title"),
-                    connection_type=plan.get("serviceType"),
-                    monthly_price=plan.get("monthlyPrice"),
-                    original_price=plan.get("rrp"),
-                    promotion_text=plan.get("promotionText"),
-                    #bundle=plan.get("bundle"),
-                    data_allowance=plan.get("dataEntitlement"),
-                    speed_down_mbps=plan.get("downSpeed"),
-                    speed_up_mbps=plan.get("upSpeed"),
-                    contract_term_months=plan.get("contractTermMonths"),
-                    landline_allowed=plan.get("landlineAllowed"),
-                    antenna_required=plan.get("antennaRequired"),
-                    queried_address=plan.get("queriedAddress"),
-                    data_source=plan.get("dataSource"),
-                    source_url=plan.get("sourceUrl"),
-                    collected_at=plan.get("collectedAt"),
+                    plan_name=plan.get("plan_name"),
+                    connection_type=plan.get("connection_type"),
+
+                    price=plan.get("price"),
+                    billing_frequency=plan.get("billing_frequency"),
+                    data_allowance=plan.get("data_allowance"),
+                    speed_down_mbps=plan.get("speed_down_mbps"),
+                    speed_up_mbps=plan.get("speed_up_mbps"),
+
+                    promo_price=plan.get("promo_price"),
+                    promo_period=plan.get("promo_period"),
+                    promo_period_unit=plan.get("promo_period_unit"),
+
+                    contract_type=plan.get("contract_type"),
+                    contract_term_months=plan.get("contract_term_months"),
+                    contract_condition_text=plan.get("contract_condition_text"),
+
+                    open_term_connection_fee=plan.get("open_term_connection_fee"),
+                    fixed_term_connection_fee=plan.get("fixed_term_connection_fee"),
+                    early_termination_fee=plan.get("early_termination_fee"),
+                    early_termination_fee_condition_text=plan.get("early_termination_fee_condition_text"),
+                    shipping_fee=plan.get("shipping_fee"),
+
+                    power_bundle_available=plan.get("power_bundle_available"),
+                    power_bundle_saving_amount=plan.get("power_bundle_saving_amount"),
+                    power_bundle_saving_pct=plan.get("power_bundle_saving_pct"),
+
+                    gas_bundle_available=plan.get("gas_bundle_available"),
+                    gas_bundle_saving_amount=plan.get("gas_bundle_saving_amount"),
+
+                    mobile_bundle_available=plan.get("mobile_bundle_available"),
+                    mobile_bundle_saving_amount=plan.get("mobile_bundle_saving_amount"),
+
+                    bundle_condition_text=plan.get("bundle_condition_text"),
+
+                    byo_modem_allowed=plan.get("byo_modem_allowed"),
+                    modem_rental_available=plan.get("modem_rental_available"),
+                    modem_rental_price=plan.get("modem_rental_price"),
+                    modem_rental_billing_frequency=plan.get("modem_rental_billing_frequency"),
+                    modem_rental_condition_text=plan.get("modem_rental_condition_text"),
+                    modem_purchase_available=plan.get("modem_purchase_available"),
+                    modem_purchase_price=plan.get("modem_purchase_price"),
+                    modem_purchase_condition_text=plan.get("modem_purchase_condition_text"),
+
+                    antenna_required=plan.get("antenna_required"),
+
+                    data_source=plan.get("data_source"),
+                    source_url=plan.get("source_url"),
+                    collected_at=plan.get("collected_at"),
+
+                    promotion_text=plan.get("promotion_text"),
+                    raw_offer_text=plan.get("raw_offer_text"),
                 )
             )
 
