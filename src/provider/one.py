@@ -29,13 +29,36 @@ headers = {
 }
 
 data = {"segment": "Consumer"}
+REQUEST_TIMEOUT_SECONDS = 30
 
 
 def fetch_one_plans():
     # Retrieve broadband plan records from the One NZ catalogue API.
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(
+        url,
+        headers=headers,
+        json=data,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type.lower():
+        preview = response.text[:200].replace("\n", " ")
+        raise ValueError(
+            f"One NZ returned non-JSON response: {content_type} {preview}"
+        )
+
     res_json = response.json()
-    return res_json.get("data", [])
+
+    if not isinstance(res_json, dict):
+        raise ValueError("One NZ returned an unexpected JSON response")
+
+    plans = res_json.get("data")
+    if not isinstance(plans, list):
+        raise ValueError("One NZ response is missing the plan data list")
+
+    return plans
 
 
 def extract_promotion_message_text(html):
