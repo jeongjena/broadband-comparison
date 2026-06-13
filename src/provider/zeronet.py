@@ -8,16 +8,8 @@ Last Updated: 2026-06-09
 Retrieves broadband plan information from the Zeronet website using
 Selenium and BeautifulSoup. The scraper captures four page states:
 monthly fibre, monthly hyperfibre, weekly fibre, and weekly hyperfibre plans, 
-before transforming the results intothe project's standardised format.
+before transforming the results into the project's standardised format.
 """
-
-# TODO:
-# Confirm whether Hyperfibre struck-through pricing should map to:
-# - price + promo_price
-# - or rrp + price
-#
-# Current implementation:
-# price=145, promo_price=135
 
 from datetime import datetime
 import time
@@ -52,8 +44,6 @@ def find_hyperfibre_button(driver):
 
 
 def click_hyperfibre_button(driver):
-    start = time.perf_counter()
-
     hyperfibre_button = find_hyperfibre_button(driver)
 
     driver.execute_script(
@@ -70,10 +60,7 @@ def click_hyperfibre_button(driver):
 
     time.sleep(2)
 
-    print(
-        f"[TIMING] Hyperfibre toggle: "
-        f"{time.perf_counter() - start:.2f}s"
-    )
+
 
 
 def fetch_zeronet_plans():
@@ -105,14 +92,9 @@ def fetch_zeronet_plans():
 
         all_html = []
 
-        start = time.perf_counter()
 
         monthly_details = collect_selected_plan_details(driver)
 
-        print(
-            f"[TIMING] Monthly Fibre details: "
-            f"{time.perf_counter() - start:.2f}s"
-        )
 
         all_html.append({
             "billingFrequency": "Monthly",
@@ -124,14 +106,9 @@ def fetch_zeronet_plans():
 
         hyper_html = driver.page_source
 
-        start = time.perf_counter()
 
         monthly_hyper_details = collect_selected_plan_details(driver)
 
-        print(
-            f"[TIMING] Monthly Hyperfibre details: "
-            f"{time.perf_counter() - start:.2f}s"
-        )
 
         all_html.append({
             "billingFrequency": "Monthly",
@@ -151,14 +128,8 @@ def fetch_zeronet_plans():
 
         time.sleep(1)
 
-        start = time.perf_counter()
 
         weekly_details = collect_selected_plan_details(driver)
-
-        print(
-            f"[TIMING] Weekly Fibre details: "
-            f"{time.perf_counter() - start:.2f}s"
-        )
 
         all_html.append({
             "billingFrequency": "Weekly",
@@ -170,14 +141,8 @@ def fetch_zeronet_plans():
 
         hyper_html = driver.page_source
 
-        start = time.perf_counter()
 
         weekly_hyper_details = collect_selected_plan_details(driver)
-
-        print(
-            f"[TIMING] Weekly Hyperfibre details: "
-            f"{time.perf_counter() - start:.2f}s"
-        )
 
         all_html.append({
             "billingFrequency": "Weekly",

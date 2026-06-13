@@ -100,7 +100,6 @@ def clean_genesis_plans(plans):
             continue
         seen.add(key)
 
-        raw_service_type = plan.get("serviceType")
 
         # Genesis identifies Hyperfibre plans using 2000 Mbps and
         # 4000 Mbps service tiers.
@@ -130,28 +129,32 @@ def clean_genesis_plans(plans):
     return cleaned_plans
 
 def get_genesis_plans():
-    plans = fetch_genesis_plans()
-    cleaned = clean_genesis_plans(plans)
+    try:
+        plans = fetch_genesis_plans()
+        cleaned = clean_genesis_plans(plans)
 
-    standardized = [] 
+        standardized = [] 
 
-    for plan in cleaned:
-        standardized.append(
-            standardize_plans(
-                provider="Genesis",
-                plan_name=plan.get("title"),
-                connection_type=plan.get("serviceType"),
-                price=plan.get("price"),
-                billing_frequency=plan.get("billingFrequency"),
-                data_allowance=plan.get("dataEntitlement"),
-                speed_down_mbps=plan.get("downSpeed"),
-                speed_up_mbps=plan.get("upSpeed"),
-                promotion_text=plan.get("promotionText"),
-                contract_term_months=plan.get("contractTermMonths"),
-                antenna_required=plan.get("antennaRequired"),
-                data_source="API",
-                source_url="https://www.genesisenergy.co.nz/broadband",
-                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for plan in cleaned:
+            standardized.append(
+                standardize_plans(
+                    provider="Genesis",
+                    plan_name=plan.get("title"),
+                    connection_type=plan.get("serviceType"),
+                    price=plan.get("price"),
+                    billing_frequency=plan.get("billingFrequency"),
+                    data_allowance=plan.get("dataEntitlement"),
+                    speed_down_mbps=plan.get("downSpeed"),
+                    speed_up_mbps=plan.get("upSpeed"),
+                    promotion_text=plan.get("promotionText"),
+                    contract_term_months=plan.get("contractTermMonths"),
+                    antenna_required=plan.get("antennaRequired"),
+                    data_source="API",
+                    source_url="https://www.genesisenergy.co.nz/broadband",
+                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
             )
-        )
-    return standardized
+        return standardized
+    except Exception as e:
+        print(f"[ERROR] Genesis failed: {type(e).__name__}: {e}")
+        return []
