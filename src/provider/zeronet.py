@@ -1,3 +1,16 @@
+"""
+Zeronet Broadband Plan Scraper
+
+Contributor: Markus Salvador (23203124)
+Version: 0.5
+Last Updated: 2026-06-09
+
+Retrieves broadband plan information from the Zeronet website using
+Selenium and BeautifulSoup. The scraper captures four page states:
+monthly fibre, monthly hyperfibre, weekly fibre, and weekly hyperfibre plans, 
+before transforming the results into the project's standardised format.
+"""
+
 from datetime import datetime
 import time
 from pathlib import Path
@@ -38,17 +51,24 @@ def click_hyperfibre_button(driver):
         hyperfibre_button
     )
 
-    time.sleep(2)
+    time.sleep(0.5)
 
     driver.execute_script(
         "arguments[0].click();",
         hyperfibre_button
     )
 
-    time.sleep(5)
+    time.sleep(2)
+
+
 
 
 def fetch_zeronet_plans():
+    # Load the Zeronet plans page and capture all pricing views required
+    # for extraction. Selenium is used because plan content changes
+    # dynamically after user interaction.
+
+
     options = webdriver.ChromeOptions()
 
     # run browser in headless mode
@@ -72,20 +92,28 @@ def fetch_zeronet_plans():
 
         all_html = []
 
-        # scrape monthly plans
+
+        monthly_details = collect_selected_plan_details(driver)
+
+
         all_html.append({
             "billingFrequency": "Monthly",
             "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "selectedPlanDetails": monthly_details
         })
         
         click_hyperfibre_button(driver)
 
-        # scrape monthly hyperfibre
+        hyper_html = driver.page_source
+
+
+        monthly_hyper_details = collect_selected_plan_details(driver)
+
+
         all_html.append({
             "billingFrequency": "Monthly",
-            "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "html": hyper_html,
+            "selectedPlanDetails": monthly_hyper_details
         })
 
         weekly_button = driver.find_element(
@@ -98,22 +126,28 @@ def fetch_zeronet_plans():
             weekly_button
         )
 
-        time.sleep(3)
+        time.sleep(1)
 
-        # scrape weekly plans
+
+        weekly_details = collect_selected_plan_details(driver)
+
         all_html.append({
             "billingFrequency": "Weekly",
             "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "selectedPlanDetails": weekly_details
         })
 
         click_hyperfibre_button(driver)
 
-        # scrape weekly hyperfibre
+        hyper_html = driver.page_source
+
+
+        weekly_hyper_details = collect_selected_plan_details(driver)
+
         all_html.append({
             "billingFrequency": "Weekly",
-            "html": driver.page_source,
-            "selectedPlanDetails": collect_selected_plan_details(driver)
+            "html": hyper_html,
+            "selectedPlanDetails": weekly_hyper_details
         })
         
         RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -154,9 +188,9 @@ def collect_selected_plan_details(driver):
                 "arguments[0].scrollIntoView({block: 'center'});",
                 button
             )
-            time.sleep(0.5)
+            time.sleep(0.1)
             driver.execute_script("arguments[0].click();", button)
-            time.sleep(2)
+            time.sleep(0.5)
 
             body_text = clean_text(
                 driver.find_element(By.TAG_NAME, "body").text
@@ -175,7 +209,7 @@ def collect_selected_plan_details(driver):
                 )
                 if close_buttons:
                     driver.execute_script("arguments[0].click();", close_buttons[0])
-                    time.sleep(0.5)
+                    time.sleep(0.1)
 
         except Exception:
             continue
@@ -246,6 +280,8 @@ def extract_selected_plan_details(text):
     return details
 
 def extract_price_number(text):
+    # Converts price strings such as "$99.00" into numeric values. 
+
     if not text:
         return None
 
@@ -358,6 +394,9 @@ def remove_free_weekly_offer_text(text):
 
 
 def extract_speed(text):
+    # Extracts the numeric component from speed labels such as
+    # "500 Mbps Download".
+
     if not text:
         return None
 
@@ -367,6 +406,9 @@ def extract_speed(text):
 
 
 def clean_zeronet_plans(all_html):
+    # Parse captured HTML snapshots and map plan information into the 
+    # intermediate project schema before standardisation.
+
     cleaned_plans = []
 
     # prevent duplicate plans
@@ -647,6 +689,8 @@ def clean_zeronet_plans(all_html):
 
 
 def get_zeronet_plans():
+    # Main entry point used by the project aggregator. 
+
     try:
         all_html = fetch_zeronet_plans()
 

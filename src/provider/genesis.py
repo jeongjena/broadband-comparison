@@ -1,9 +1,21 @@
+"""
+Genesis Broadband API Extractor
+
+Contributor: Markus Salvador (23203124)
+Version: 0.6
+Last Updated: 2026-06-13
+
+Retrieves broadband plan information from the Genesis broadband API,
+extracts internet service plans, and transforms the results into the
+project's standardised format.
+"""
+
 import re
 import requests
 from datetime import datetime
 from processing.standardizer import standardize_plans
 
-url = "https://api.2degrees.nz/sales/v3/catalog/products?businessGroup=genesis&salesChannel=OnlineSignup"
+URL = "https://api.2degrees.nz/sales/v3/catalog/products?businessGroup=genesis&salesChannel=OnlineSignup"
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -14,7 +26,8 @@ headers = {
 
 def fetch_genesis_plans():
     # line call
-    res = requests.get(url, headers=headers)
+    res = requests.get(URL, headers=headers)
+    res.raise_for_status()
     data = res.json()
 
     all_plans = []
@@ -32,7 +45,7 @@ def fetch_genesis_plans():
                         "plan": plan
                     })
 
-    return all_plans, []
+    return all_plans
 
 def extract_promotion_text(features):
     if not features:
@@ -45,17 +58,12 @@ def extract_promotion_text(features):
 
     return " | ".join(matches) if matches else None
 
-def extract_contract_term(features):
-    if not features:
-        return None
-
-    match = re.search(r"(\d+)\s*month", features.lower())
-    return int(match.group(1)) if match else None
 
 
-def clean_genesis_plans(plans, _):
+def clean_genesis_plans(plans):
     cleaned_plans = []
-    seen = set() # to track duplicates based on (plan name, speed)
+    # Track duplicates based on plan name and speed
+    seen = set() 
 
     for item in plans:
         product = item.get("product", {})
@@ -75,7 +83,13 @@ def clean_genesis_plans(plans, _):
         )
 
         charges = plan.get("charges", [])
-        price = charges[0].get("chargeIncludingGst") if charges else None
+
+        price = None
+        billing_frequency = None
+
+        if charges:
+            price = charges[0].get("chargeIncludingGst")
+            billing_frequency = charges[0].get("billFrequency")
 
         key = (
             plan.get("planDescription"),
@@ -86,25 +100,26 @@ def clean_genesis_plans(plans, _):
             continue
         seen.add(key)
 
-        raw_service_type = plan.get("serviceType")
 
-        connection_type = "Fibre"
+        # Genesis identifies Hyperfibre plans using 2000 Mbps and
+        # 4000 Mbps service tiers.
+        down_speed = speeds.get("averageSpeedDownMbps")
 
-        if (
-            "2000" in str(raw_service_type)
-            or "4000" in str(raw_service_type)
-        ):
+        if down_speed and down_speed >= 2000:
             connection_type = "Hyperfibre"
+        else:
+            connection_type = "Fibre"
 
         cleaned_plan = {
             "title": plan.get("planDescription"),
             "serviceType": connection_type,
-            "rrp": price,
+            "price": price,
+            "billingFrequency": billing_frequency,
             "dataEntitlement": plan.get("dataCap") or "Unlimited",
             "downSpeed": speeds.get("averageSpeedDownMbps"),
             "upSpeed": speeds.get("averageSpeedUpMbps"),
             "promotionText": extract_promotion_text(features),
-            "contractTermMonths": extract_contract_term(features),
+            "contractTermMonths": plan.get("minimumContractTerm"),            
             "landlineAllowed": None,  # not provided by API
             "antennaRequired": None   # not provided by API
         }
@@ -114,28 +129,32 @@ def clean_genesis_plans(plans, _):
     return cleaned_plans
 
 def get_genesis_plans():
-    plans, _ = fetch_genesis_plans()
-    cleaned = clean_genesis_plans(plans, _)
+    try:
+        plans = fetch_genesis_plans()
+        cleaned = clean_genesis_plans(plans)
 
-    standardized = [] 
+        standardized = [] 
 
-    for plan in cleaned:
-        standardized.append(
-            standardize_plans(
-                provider="Genesis",
-                plan_name=plan.get("title"),
-                connection_type=plan.get("serviceType"),
-                original_price=plan.get("rrp"),
-                data_allowance=plan.get("dataEntitlement"),
-                speed_down_mbps=plan.get("downSpeed"),
-                speed_up_mbps=plan.get("upSpeed"),
-                promotion_text=plan.get("promotionText"),
-                contract_term_months=plan.get("contractTermMonths"),
-                landline_allowed=plan.get("landlineAllowed"),
-                antenna_required=plan.get("antennaRequired"),
-                data_source="API",
-                source_url="https://www.genesisenergy.co.nz/broadband",
-                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for plan in cleaned:
+            standardized.append(
+                standardize_plans(
+                    provider="Genesis",
+                    plan_name=plan.get("title"),
+                    connection_type=plan.get("serviceType"),
+                    price=plan.get("price"),
+                    billing_frequency=plan.get("billingFrequency"),
+                    data_allowance=plan.get("dataEntitlement"),
+                    speed_down_mbps=plan.get("downSpeed"),
+                    speed_up_mbps=plan.get("upSpeed"),
+                    promotion_text=plan.get("promotionText"),
+                    contract_term_months=plan.get("contractTermMonths"),
+                    antenna_required=plan.get("antennaRequired"),
+                    data_source="API",
+                    source_url="https://www.genesisenergy.co.nz/broadband",
+                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
             )
-        )
-    return standardized
+        return standardized
+    except Exception as e:
+        print(f"[ERROR] Genesis failed: {type(e).__name__}: {e}")
+        return []
