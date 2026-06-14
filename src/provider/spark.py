@@ -17,6 +17,7 @@ from processing.standardizer import clean_text
 from processing.standardizer import standardize_plans
 
 url = "https://api.spark.co.nz/graphql"
+REQUEST_TIMEOUT_SECONDS = 30
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -160,7 +161,12 @@ def fetch_spark_plans():
             "elid": None
         }
     }
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
     response.raise_for_status()
 
     content_type = response.headers.get("content-type", "")
@@ -170,8 +176,32 @@ def fetch_spark_plans():
 
     data = response.json()
 
+    if not isinstance(data, dict):
+        raise ValueError("Spark returned an unexpected JSON response")
+
     if data.get("errors"):
         raise ValueError(f"Spark GraphQL errors: {data.get('errors')}")
+
+    response_data = data.get("data")
+    if not isinstance(response_data, dict):
+        raise ValueError("Spark response is missing GraphQL data")
+
+    availability = response_data.get("productAvailabilityByElid")
+    if not isinstance(availability, dict):
+        raise ValueError("Spark response is missing product availability data")
+
+    if availability.get("success") is False:
+        detail = (
+            availability.get("message")
+            or availability.get("description")
+            or availability.get("code")
+            or "unknown error"
+        )
+        raise ValueError(f"Spark product availability failed: {detail}")
+
+    sub_categories = availability.get("subCategories")
+    if not isinstance(sub_categories, list) or not sub_categories:
+        raise ValueError("Spark response contains no broadband plan categories")
 
     return data
 
@@ -545,50 +575,51 @@ def clean_spark_plans(raw_data):
 
 def get_spark_plans():
     # Main entry point used to return standardised Spark plan data.
-    try:
-        raw_data = fetch_spark_plans()
-        
-        standardized_plans = []
-        for plan in clean_spark_plans(raw_data):
-            standardized_plans.append(
-                standardize_plans(
-                    provider="Spark",
-                    plan_name=plan.get("planName"),
-                    connection_type=plan.get("connectionType"),
-                    price=plan.get("price"),
-                    billing_frequency=plan.get("billingFrequency"),
-                    promo_price=plan.get("promoPrice"),
-                    promo_period=plan.get("promoPeriod"),
-                    promo_period_unit=plan.get("promoPeriodUnit"),
-                    data_allowance=plan.get("dataAllowance"),
-                    speed_down_mbps=plan.get("speedDown"),
-                    speed_up_mbps=plan.get("speedUp"),
-                    contract_type=plan.get("contractType"),
-                    contract_term_months=plan.get("contractTermMonth"),
-                    contract_condition_text=plan.get("contractConditionText"),
-                    early_termination_fee=plan.get("earlyTerminationFee"),
-                    early_termination_fee_condition_text=plan.get("earlyTerminationFeeConditionText"),
-                    shipping_fee=plan.get("shippingFee"),
-                    power_bundle_available=plan.get("powerBundleAvailable"),
-                    power_bundle_saving_amount=plan.get("powerBundleSavingAmount"),
-                    power_bundle_saving_pct=plan.get("powerBundleSavingPct"),
-                    byo_modem_allowed=plan.get("byoModemAllowed"),
-                    modem_rental_available=plan.get("modemRentalAvailable"),
-                    modem_rental_price=plan.get("modemRentalPrice"),
-                    modem_rental_billing_frequency=plan.get("modemRentalBillingFrequency"),
-                    modem_rental_condition_text=plan.get("modemRentalConditionText"),
-                    modem_purchase_available=plan.get("modemPurchaseAvailable"),
-                    modem_purchase_price=plan.get("modemPurchasePrice"),
-                    modem_purchase_condition_text=plan.get("modemPurchaseConditionText"),
-                    antenna_required=plan.get("antennaRequired"),
-                    data_source="API",
-                    source_url="https://www.spark.co.nz/shop/broadband/plans/",
-                    collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    promotion_text=plan.get("promotionText"),
-                    raw_offer_text=plan.get("rawOfferText"),
-                )
+    raw_data = fetch_spark_plans()
+    cleaned_plans = clean_spark_plans(raw_data)
+
+    if not cleaned_plans:
+        raise ValueError("Spark response contains no broadband plans")
+
+    standardized_plans = []
+    for plan in cleaned_plans:
+        standardized_plans.append(
+            standardize_plans(
+                provider="Spark",
+                plan_name=plan.get("planName"),
+                connection_type=plan.get("connectionType"),
+                price=plan.get("price"),
+                billing_frequency=plan.get("billingFrequency"),
+                promo_price=plan.get("promoPrice"),
+                promo_period=plan.get("promoPeriod"),
+                promo_period_unit=plan.get("promoPeriodUnit"),
+                data_allowance=plan.get("dataAllowance"),
+                speed_down_mbps=plan.get("speedDown"),
+                speed_up_mbps=plan.get("speedUp"),
+                contract_type=plan.get("contractType"),
+                contract_term_months=plan.get("contractTermMonth"),
+                contract_condition_text=plan.get("contractConditionText"),
+                early_termination_fee=plan.get("earlyTerminationFee"),
+                early_termination_fee_condition_text=plan.get("earlyTerminationFeeConditionText"),
+                shipping_fee=plan.get("shippingFee"),
+                power_bundle_available=plan.get("powerBundleAvailable"),
+                power_bundle_saving_amount=plan.get("powerBundleSavingAmount"),
+                power_bundle_saving_pct=plan.get("powerBundleSavingPct"),
+                byo_modem_allowed=plan.get("byoModemAllowed"),
+                modem_rental_available=plan.get("modemRentalAvailable"),
+                modem_rental_price=plan.get("modemRentalPrice"),
+                modem_rental_billing_frequency=plan.get("modemRentalBillingFrequency"),
+                modem_rental_condition_text=plan.get("modemRentalConditionText"),
+                modem_purchase_available=plan.get("modemPurchaseAvailable"),
+                modem_purchase_price=plan.get("modemPurchasePrice"),
+                modem_purchase_condition_text=plan.get("modemPurchaseConditionText"),
+                antenna_required=plan.get("antennaRequired"),
+                data_source="API",
+                source_url="https://www.spark.co.nz/shop/broadband/plans/",
+                collected_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                promotion_text=plan.get("promotionText"),
+                raw_offer_text=plan.get("rawOfferText"),
             )
-        return standardized_plans
-    except Exception as e:
-        print(f"Spark extraction failed: {e}")
-        return []
+        )
+
+    return standardized_plans

@@ -22,13 +22,14 @@ def clean_text(text):
     )
 
 def infer_connection_type(text):
-    # Infer the broadband connection type from plan names or descriptive text.
+    # Map connection type text to a standard schema value.
     if not text:
         return None
 
     lower = str(text).lower()
 
-    if "wireless" in lower or "portable broadband" in lower: return "Wireless"
+    if "rural wireless" in lower:
+        return "Rural Wireless"
 
     if "hyperfibre" in lower or "hyperfiber" in lower:
         return "Hyperfibre"
@@ -41,6 +42,9 @@ def infer_connection_type(text):
 
     if "adsl" in lower:
         return "ADSL"
+
+    if "wireless" in lower or "portable broadband" in lower:
+        return "Wireless"
 
     return "unknown"
 
@@ -118,7 +122,7 @@ def standardize_plans(
     return {
         "provider": provider,
         "plan_name": plan_name,
-        "connection_type": connection_type,
+        "connection_type": infer_connection_type(connection_type),
         "price": price,
         "billing_frequency": billing_frequency,
         "data_allowance": data_allowance,

@@ -78,6 +78,7 @@ Planned:
 - `src/validation/` - Validation framework (planned)
 - `data/` - Data storage
 - `src/main.py` - Application entry point
+- `src/Export_excel.py` - Exports provider data to an Excel workbook for UAT
 
 ## Getting Started
 
@@ -88,17 +89,24 @@ Planned:
 - beautifulsoup4
 - selenium
 - webdriver-manager
+- openpyxl
 
 ### Install Dependencies
 
 ```bash
-pip install requests beautifulsoup4 selenium webdriver-manager
+pip install requests beautifulsoup4 selenium webdriver-manager openpyxl
 ```
 
-### Run
+### Run Console Output
 
 ```bash
 python src/main.py
+```
+
+### Export UAT Results to Excel
+
+```bash
+python src/Export_excel.py
 ```
 
 ## Data Flow

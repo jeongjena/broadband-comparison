@@ -19,6 +19,9 @@ from processing.standardizer import standardize_plans
 
 
 BASE_URL = "https://api.2degrees.nz/sales/v3/catalog"
+DEFAULT_CONTRACT_TYPE = "open_or_fixed"
+DEFAULT_FIXED_TERM_MONTHS = 12
+REQUEST_TIMEOUT_SECONDS = 30
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -53,49 +56,103 @@ def clean_money(value):
     return int(amount) if amount.is_integer() else amount
 
 
+def fetch_json(path, params):
+    response = requests.get(
+        f"{BASE_URL}/{path}",
+        headers=headers,
+        params=params,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type.lower():
+        preview = response.text[:200].replace("\n", " ")
+        raise ValueError(
+            f"2degrees {path} returned non-JSON response: {content_type} {preview}"
+        )
+
+    result = response.json()
+    if not isinstance(result, (dict, list)):
+        raise ValueError(f"2degrees {path} returned an unexpected JSON response")
+
+    return result
+
+
+def require_catalog_items(data, endpoint, key=None):
+    items = catalog_items(data, key)
+
+    if not items:
+        raise ValueError(f"2degrees {endpoint} returned no catalogue items")
+
+    return items
+
+
+def validate_catalog_response(data, endpoint, key=None):
+    if isinstance(data, list):
+        return
+
+    if isinstance(data, dict):
+        if key and isinstance(data.get(key), list):
+            return
+
+        if isinstance(data.get("value"), list):
+            return
+
+    raise ValueError(f"2degrees {endpoint} returned an unexpected structure")
+
+
 def fetch_data():
     # Retrieve fixed broadband, wireless broadband, offer, product, and hardware data.
-    fixed = requests.get(
-        f"{BASE_URL}/broadbandPlanCards",
-        headers=headers,
-        params={
+    fixed = fetch_json(
+        "broadbandPlanCards",
+        {
             "businessGroup": "2degrees",
             "salesChannel": "OnlineSignup",
             "productType": "broadband"
-        }
-    ).json()
+        },
+    )
 
-    wireless = requests.get(
-        f"{BASE_URL}/broadbandPlanCards",
-        headers=headers,
-        params={
+    wireless = fetch_json(
+        "broadbandPlanCards",
+        {
             "businessGroup": "2degrees",
             "salesChannel": "OnlineSignup",
             "productType": "wireless"
-        }
-    ).json()
+        },
+    )
+
+    fixed_items = require_catalog_items(fixed, "fixed broadband plan cards")
+    wireless_items = require_catalog_items(wireless, "wireless broadband plan cards")
 
     # Offers provide current API-backed promotion copy.
-    offers = requests.get(
-        f"{BASE_URL}/offers/v2",
-        headers=headers,
-        params={
+    offers = fetch_json(
+        "offers/v2",
+        {
             "businessGroup": "2degrees",
             "salesChannel": "OnlineSignup"
-        }
-    ).json()
+        },
+    )
+
+    if not isinstance(offers, list):
+        raise ValueError("2degrees offers API returned an unexpected structure")
 
     # Products expose core product charges, including open-term connection fees.
-    products = requests.get(
-        f"{BASE_URL}/products",
-        headers=headers,
-        params={
+    products = fetch_json(
+        "products",
+        {
             "businessGroup": "2degrees",
             "salesChannel": "OnlineSignup"
-        }
-    ).json()
+        },
+    )
 
-    plan_items = catalog_items(fixed) + catalog_items(wireless)
+    if not isinstance(products, dict) or not isinstance(products.get("coreServices"), list):
+        raise ValueError("2degrees products API returned an unexpected structure")
+
+    if not products["coreServices"]:
+        raise ValueError("2degrees products API returned no core services")
+
+    plan_items = fixed_items + wireless_items
     core_product_keys = sorted({
         core_product
         for item in plan_items
@@ -105,15 +162,20 @@ def fetch_data():
 
     # Hardware prices are scoped to each real core product key.
     for core_product_key in core_product_keys:
-        hardware_by_core_product[core_product_key] = requests.get(
-            f"{BASE_URL}/hardwareProducts",
-            headers=headers,
-            params={
+        hardware_response = fetch_json(
+            "hardwareProducts",
+            {
                 "businessGroup": "2degrees",
                 "salesChannel": "OnlineSignup",
                 "coreProductKey": core_product_key
-            }
-        ).json()
+            },
+        )
+        validate_catalog_response(
+            hardware_response,
+            f"hardware products for {core_product_key}",
+            "hardwareProducts",
+        )
+        hardware_by_core_product[core_product_key] = hardware_response
 
     return fixed, wireless, offers, products, hardware_by_core_product
 
@@ -213,41 +275,25 @@ def extract_contract_term_months(feature):
     return None
 
 
-def extract_minimum_contract_term_months(item, core_product_lookup):
-    terms = []
-
-    for core_product_key in item.get("coreProducts", []):
-        product = core_product_lookup.get(core_product_key)
-
-        if not product:
-            continue
-
-        for component in product.get("coreProductComponents", []):
-            for plan in component.get("coreProductComponentPlans", []):
-                term = plan.get("minimumContractTerm")
-
-                if term is not None and int(term) > 0:
-                    terms.append(int(term))
-
-    return min(terms) if terms else None
-
-
 def extract_contract_type(feature, open_term_connection_fee):
     lower = feature.lower() if feature else ""
 
-    has_open_term = (
-        open_term_connection_fee is not None
-        or re.search(r"\bopen\b.*\bterm\b.*\bavailable\b", lower) is not None
-    )
+    if re.search(r"\bopen\s+term\s+only\b", lower):
+        return "open"
+
+    if re.search(r"\b\d+\s*month\s+term\s+only\b", lower):
+        return "fixed"
+
+    has_open_term_text = re.search(r"\bopen\b.*\bterm\b", lower) is not None
     has_fixed_term = extract_contract_term_months(feature) is not None
 
-    if has_open_term and has_fixed_term:
+    if has_fixed_term and (has_open_term_text or open_term_connection_fee is not None):
         return "open_or_fixed"
 
     if has_fixed_term:
         return "fixed"
 
-    if has_open_term:
+    if has_open_term_text:
         return "open"
 
     return None
@@ -662,12 +708,6 @@ def get_promo_key(text):
     if "free modem rental" in lower:
         return "free_modem_rental"
 
-    if (
-        ("$5/m" in lower or "save $5" in lower or "5/m off" in lower)
-        and ("12 month" in lower or "12-month" in lower or "12 months" in lower)
-    ):
-        return "five_dollar_12_month_discount"
-
     if "prime video" in lower:
         return "prime_video"
 
@@ -677,6 +717,20 @@ def get_promo_key(text):
         and ("$10" in lower or "10/m" in lower)
     ):
         return "mobile_broadband_bundle_discount"
+
+    amount_match = re.search(
+        r"(?:save\s*)?\$?\s*(\d+(?:\.\d+)?)\s*(?:/\s*m|per\s+month|/\s*month)",
+        lower,
+    )
+    duration_match = re.search(r"\b(\d+)\s*-?\s*months?\b", lower)
+
+    if not amount_match and duration_match:
+        amount_match = re.search(r"\bsave\s+\$\s*(\d+(?:\.\d+)?)\b", lower)
+
+    if amount_match and duration_match:
+        amount = clean_money(amount_match.group(1))
+        months = int(duration_match.group(1))
+        return f"monthly_discount_{amount}_{months}_months"
 
     return lower
 
@@ -743,14 +797,17 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
 
         open_term_connection_fee = extract_open_term_connection_fee(item, core_product_lookup)
 
-        contract_term_months = (
-            extract_contract_term_months(feature)
-            or extract_minimum_contract_term_months(item, core_product_lookup)
-        )
+        contract_term_months = extract_contract_term_months(feature)
         contract_type = extract_contract_type(feature, open_term_connection_fee)
 
-        if contract_term_months and contract_type is None:
-            contract_type = "fixed"
+        # The catalog API does not expose all checkout contract options.
+        # Based on the consumer checkout flow, standard 2degrees plans can be
+        # selected as either open term or 12-month term when no explicit limit is shown.
+        if contract_type is None:
+            contract_type = DEFAULT_CONTRACT_TYPE
+            contract_term_months = DEFAULT_FIXED_TERM_MONTHS
+        elif contract_type == "open":
+            contract_term_months = None
 
         catalog_modem_details = extract_catalog_modem_details(
             item,
