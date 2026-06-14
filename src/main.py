@@ -8,8 +8,8 @@ from provider.zeronet import get_zeronet_plans
 from provider.one import get_one_plans
 from provider.sky import get_sky_plans
 from provider.spark import get_spark_plans
-# from provider.electrickiwi import get_electrickiwi_plans
-# from provider.wirelessnation import get_wirelessnation_plans
+from provider.electric_kiwi import get_electric_kiwi_plans
+from provider.wireless_nation import get_wireless_nation_plans
 
 
 ACTIVE_PROVIDERS = [
@@ -22,8 +22,8 @@ ACTIVE_PROVIDERS = [
     ("Contact", get_contact_plans),
     ("Genesis", get_genesis_plans),
     ("Sky", get_sky_plans),
-    # ("Electric Kiwi", get_electrickiwi_plans),
-    # ("Wireless Nation", get_wirelessnation_plans),
+    ("Electric Kiwi", get_electric_kiwi_plans),
+    ("Wireless Nation", get_wireless_nation_plans),
 ]
 
 

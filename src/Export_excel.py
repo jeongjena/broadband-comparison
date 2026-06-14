@@ -10,9 +10,9 @@ from provider.twodegrees import get_twodegrees_plans
 from provider.one import get_one_plans
 from provider.contact import get_contact_plans
 from provider.genesis import get_genesis_plans
-# from provider.electric_kiwi import get_electric_kiwi_plans
+from provider.electric_kiwi import get_electric_kiwi_plans
 from provider.zeronet import get_zeronet_plans
-# from provider.wireless_nation import get_wireless_nation_plans
+from provider.wireless_nation import get_wireless_nation_plans
 
 
 ACTIVE_PROVIDERS = [
@@ -24,9 +24,9 @@ ACTIVE_PROVIDERS = [
     ("One", get_one_plans),
     ("Contact", get_contact_plans),
     ("Genesis", get_genesis_plans),
-    # ("Electric Kiwi", get_electric_kiwi_plans),
+    ("Electric Kiwi", get_electric_kiwi_plans),
     ("Zeronet", get_zeronet_plans),
-    # ("Wireless Nation", get_wireless_nation_plans),
+    ("Wireless Nation", get_wireless_nation_plans),
 ]
 
 OUTPUT_PATH = "data/uat_export.xlsx"
