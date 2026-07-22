@@ -1,9 +1,17 @@
 from datetime import datetime
 from pathlib import Path
 import re
+import sys
 
 import requests
 from bs4 import BeautifulSoup
+
+# Fix import path when running as script (python3 src/provider/mercury.py) —
+# adds the "src" folder (parent of provider/) to sys.path so the sibling
+# "processing" package can be found. Same fix already used in twodegrees_llm.py.
+_src_path = Path(__file__).resolve().parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 from processing.standardizer import clean_text, standardize_plans
 
@@ -282,7 +290,14 @@ def infer_plan_name(connection_type, speed_down, data_allowance):
 
 def clean_mercury_plans(html):
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select("div.mercury-content-tile")
+
+    # FIX (2026-07-23): Mercury's site rebuild changed the plan card wrapper
+    # tag from <div> to <article> — the "mercury-content-tile" class itself
+    # is unchanged. The original selector "div.mercury-content-tile" required
+    # BOTH the div tag AND the class, so it silently matched zero cards after
+    # the rebuild. Dropping the tag qualifier makes this resilient to future
+    # tag changes too, since only the class name is checked.
+    cards = soup.select(".mercury-content-tile")
 
     if not cards:
         print("[WARNING] Mercury: no plan cards found.")
