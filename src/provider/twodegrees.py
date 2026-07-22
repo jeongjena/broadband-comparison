@@ -12,6 +12,8 @@ standardised plan format.
 
 import requests
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from processing.standardizer import infer_connection_type
 from processing.standardizer import clean_text
@@ -22,6 +24,9 @@ BASE_URL = "https://api.2degrees.nz/sales/v3/catalog"
 DEFAULT_CONTRACT_TYPE = "open_or_fixed"
 DEFAULT_FIXED_TERM_MONTHS = 12
 REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 2
+MAX_HARDWARE_WORKERS = 6
 
 headers = {
     "accept": "application/json, text/plain, */*",
@@ -57,12 +62,36 @@ def clean_money(value):
 
 
 def fetch_json(path, params):
-    response = requests.get(
-        f"{BASE_URL}/{path}",
-        headers=headers,
-        params=params,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
+    last_error = None
+
+    for attempt in range(1, REQUEST_RETRIES + 1):
+        try:
+            response = requests.get(
+                f"{BASE_URL}/{path}",
+                headers=headers,
+                params=params,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            break
+        except requests.Timeout as error:
+            last_error = error
+        except requests.HTTPError as error:
+            status_code = error.response.status_code if error.response is not None else None
+            if status_code not in {429, 500, 502, 503, 504}:
+                raise
+            last_error = error
+        except requests.RequestException as error:
+            last_error = error
+
+        if attempt == REQUEST_RETRIES:
+            raise RuntimeError(
+                f"2degrees {path} request failed after {REQUEST_RETRIES} attempts: "
+                f"{last_error}"
+            ) from last_error
+
+        time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+
     response.raise_for_status()
 
     content_type = response.headers.get("content-type", "")
@@ -100,6 +129,39 @@ def validate_catalog_response(data, endpoint, key=None):
             return
 
     raise ValueError(f"2degrees {endpoint} returned an unexpected structure")
+
+
+def fetch_hardware_by_core_product(core_product_keys):
+    hardware_by_core_product = {}
+
+    def fetch_for_key(core_product_key):
+        hardware_response = fetch_json(
+            "hardwareProducts",
+            {
+                "businessGroup": "2degrees",
+                "salesChannel": "OnlineSignup",
+                "coreProductKey": core_product_key
+            },
+        )
+        validate_catalog_response(
+            hardware_response,
+            f"hardware products for {core_product_key}",
+            "hardwareProducts",
+        )
+        return core_product_key, hardware_response
+
+    worker_count = min(MAX_HARDWARE_WORKERS, len(core_product_keys)) or 1
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(fetch_for_key, core_product_key)
+            for core_product_key in core_product_keys
+        ]
+
+        for future in as_completed(futures):
+            core_product_key, hardware_response = future.result()
+            hardware_by_core_product[core_product_key] = hardware_response
+
+    return hardware_by_core_product
 
 
 def fetch_data():
@@ -158,24 +220,9 @@ def fetch_data():
         for item in plan_items
         for core_product in item.get("coreProducts", [])
     })
-    hardware_by_core_product = {}
-
-    # Hardware prices are scoped to each real core product key.
-    for core_product_key in core_product_keys:
-        hardware_response = fetch_json(
-            "hardwareProducts",
-            {
-                "businessGroup": "2degrees",
-                "salesChannel": "OnlineSignup",
-                "coreProductKey": core_product_key
-            },
-        )
-        validate_catalog_response(
-            hardware_response,
-            f"hardware products for {core_product_key}",
-            "hardwareProducts",
-        )
-        hardware_by_core_product[core_product_key] = hardware_response
+    # Hardware prices are scoped to each real core product key. 2degrees has
+    # many near-identical keys, and this endpoint is slow when called serially.
+    hardware_by_core_product = fetch_hardware_by_core_product(core_product_keys)
 
     return fixed, wireless, offers, products, hardware_by_core_product
 
@@ -200,9 +247,47 @@ def extract_offer_text(offer):
             if not text:
                 continue
 
-            return clean_text(" ".join(text))
+            return append_offer_conditions(clean_text(" ".join(text)), offer)
 
-    return None
+    return extract_offer_summary_text(offer)
+
+
+def extract_offer_summary_text(offer):
+    billing_description = clean_text(offer.get("billingDescription"))
+
+    if not billing_description:
+        return None
+
+    return append_offer_conditions(billing_description, offer)
+
+
+def append_offer_conditions(text, offer):
+    if not text:
+        return None
+
+    parts = [text]
+    lower = clean_text(text).lower()
+    minimum_term = offer.get("minimumTerm")
+    duration_type = offer.get("durationType")
+    duration_months = offer.get("durationMonths")
+
+    has_minimum_term = minimum_term and re.search(
+        rf"\b(?:on\s+(?:a\s+)?)?{re.escape(str(minimum_term))}\s*[- ]?months?\s+term\b",
+        lower,
+    )
+
+    if minimum_term and not has_minimum_term:
+        parts.append(f"on a {minimum_term} month term")
+
+    if duration_type == "OneOff" and not re.search(r"\bone[- ]off\b", lower):
+        parts.append("one-off credit")
+    elif duration_type != "OneOff" and duration_months and not re.search(
+        rf"\bfor\s+{re.escape(str(duration_months))}\s+months?\b",
+        lower,
+    ):
+        parts.append(f"for {duration_months} months")
+
+    return clean_text(" ".join(parts))
 
 
 def extract_base_promo(feature):
@@ -353,19 +438,28 @@ def extract_mobile_bundle_saving_amount(text):
     if not text:
         return None
 
-    lower = text.lower()
+    for part in text.split("|"):
+        clean_part = clean_text(part)
 
-    if "mobile" not in lower or "broadband" not in lower:
-        return None
+        if not clean_part:
+            continue
 
-    match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)\s*/?\s*m", text, re.I)
+        lower = clean_part.lower()
 
-    if not match:
-        return None
+        if "mobile" not in lower or "broadband" not in lower:
+            continue
 
-    amount = float(match.group(1))
+        match = re.search(
+            r"(?:save\s*)?\$\s*(\d+(?:\.\d{1,2})?)\s*(?:/\s*m|per\s+month|/\s*month)",
+            clean_part,
+            re.I,
+        )
 
-    return int(amount) if amount.is_integer() else amount
+        if match:
+            amount = float(match.group(1))
+            return int(amount) if amount.is_integer() else amount
+
+    return None
 
 
 def extract_mobile_bundle_condition_text(text):
@@ -384,6 +478,57 @@ def extract_mobile_bundle_condition_text(text):
             return clean_part
 
     return None
+
+
+def extract_power_bundle_saving_amount(text):
+    if not text:
+        return None
+
+    for part in text.split("|"):
+        clean_part = clean_text(part)
+
+        if not clean_part:
+            continue
+
+        lower = clean_part.lower()
+
+        if not re.search(r"\bpower\b", lower) or "broadband" not in lower:
+            continue
+
+        match = re.search(
+            r"(?:save\s*)?\$\s*(\d+(?:\.\d{1,2})?)\s*(?:/\s*m|per\s+month|/\s*month)",
+            clean_part,
+            re.I,
+        )
+
+        if match:
+            amount = float(match.group(1))
+            return int(amount) if amount.is_integer() else amount
+
+    return None
+
+
+def extract_power_bundle_condition_text(text):
+    if not text:
+        return None
+
+    for part in text.split("|"):
+        clean_part = clean_text(part)
+
+        if not clean_part:
+            continue
+
+        lower = clean_part.lower()
+
+        if re.search(r"\bpower\b", lower) and "broadband" in lower:
+            return clean_part
+
+    return None
+
+
+def merge_bundle_condition_text(*conditions):
+    unique_conditions = list(dict.fromkeys(filter(None, conditions)))
+    return " | ".join(unique_conditions) if unique_conditions else None
 
 
 def extract_data_allowance_from_feature(feature):
@@ -405,6 +550,59 @@ def extract_data_allowance_from_feature(feature):
     for part in parts:
         if part and re.search(r"\bunlimited\s+data\b", part, re.I):
             return "Unlimited"
+
+    return None
+
+
+def normalize_data_allowance(value):
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        amount = float(value)
+        return int(amount) if amount.is_integer() else amount
+
+    text = clean_text(value)
+
+    if not text:
+        return None
+
+    if text.lower() == "unlimited":
+        return "Unlimited"
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:gb)?", text, re.I)
+
+    if match:
+        amount = float(match.group(1))
+        return int(amount) if amount.is_integer() else amount
+
+    return text
+
+
+def normalize_speed_mbps(value):
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        amount = float(value)
+        return int(amount) if amount.is_integer() else amount
+
+    text = clean_text(value)
+
+    if not text:
+        return None
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:mbps)?", text, re.I)
+
+    if match:
+        amount = float(match.group(1))
+        return int(amount) if amount.is_integer() else amount
 
     return None
 
@@ -618,7 +816,7 @@ def extract_modem_details_from_feature(feature):
     return details
 
 
-def extract_catalog_modem_details(item, hardware_by_core_product, contract_type=None, contract_term_months=None):
+def extract_catalog_modem_details(item, hardware_by_core_product):
     details = {}
     hardware = get_hardware_for_plan(item, hardware_by_core_product)
 
@@ -663,7 +861,21 @@ def fibre_offer_applies(plan, offer):
             if service_type.replace("-", "/") in plan_id:
                 return True
 
+            if service_speed_key(service_type) and service_speed_key(service_type) in plan_id:
+                return True
+
     return False
+
+
+def service_speed_key(service_type):
+    if not service_type:
+        return None
+
+    match = re.search(r"(\d+)-(\d+)$", service_type)
+    if not match:
+        return None
+
+    return f"{match.group(1)}/{match.group(2)}"
 
 
 def wireless_offer_applies(plan, offer):
@@ -690,13 +902,22 @@ def wireless_offer_applies(plan, offer):
 
 
 def offer_applies(plan, offer):
-    service_type = plan.get("serviceType")
-    core_products = plan.get("coreProducts", [])
-
-    if core_products or service_type == "unknown":
+    if is_wireless_plan(plan):
         return wireless_offer_applies(plan, offer)
 
     return fibre_offer_applies(plan, offer)
+
+
+def is_wireless_plan(plan):
+    plan_id = plan.get("id") or ""
+    core_products = plan.get("coreProducts", []) or []
+    service_type = plan.get("serviceType") or ""
+
+    return (
+        str(plan_id).startswith("WBB")
+        or str(service_type).lower().startswith("wireless")
+        or any(str(core_product).startswith("WBB") for core_product in core_products)
+    )
 
 
 def get_promo_key(text):
@@ -714,7 +935,6 @@ def get_promo_key(text):
     if (
         "mobile" in lower
         and "broadband" in lower
-        and ("$10" in lower or "10/m" in lower)
     ):
         return "mobile_broadband_bundle_discount"
 
@@ -812,8 +1032,6 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
         catalog_modem_details = extract_catalog_modem_details(
             item,
             hardware_by_core_product,
-            contract_type,
-            contract_term_months,
         )
         modem_details = catalog_modem_details
         modem_details.update(extract_modem_details_from_feature(feature))
@@ -824,6 +1042,8 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
         )
         mobile_bundle_saving_amount = extract_mobile_bundle_saving_amount(promo_text)
         mobile_bundle_condition_text = extract_mobile_bundle_condition_text(promo_text)
+        power_bundle_saving_amount = extract_power_bundle_saving_amount(promo_text)
+        power_bundle_condition_text = extract_power_bundle_condition_text(promo_text)
 
         result.append({
             "provider": "2degrees",
@@ -835,9 +1055,12 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
             "price": item.get("rrp"),
             "billing_frequency": "Monthly",
             "promotion_text": promo_text,
-            "data_allowance": extract_data_allowance_from_feature(feature) or item.get("dataEntitlement"),
-            "speed_down_mbps": item.get("downSpeed"),
-            "speed_up_mbps": item.get("upSpeed"),
+            "data_allowance": normalize_data_allowance(
+                extract_data_allowance_from_feature(feature)
+                or item.get("dataEntitlement")
+            ),
+            "speed_down_mbps": normalize_speed_mbps(item.get("downSpeed")),
+            "speed_up_mbps": normalize_speed_mbps(item.get("upSpeed")),
             "contract_term_months": contract_term_months,
             "contract_type": contract_type,
             "contract_condition_text": extract_contract_condition_text(
@@ -850,7 +1073,13 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
             "shipping_fee": extract_shipping_fee(feature),
             "mobile_bundle_available": mobile_bundle_saving_amount is not None,
             "mobile_bundle_saving_amount": mobile_bundle_saving_amount,
-            "bundle_condition_text": mobile_bundle_condition_text,
+            "power_bundle_available": power_bundle_saving_amount is not None,
+            "power_bundle_saving_amount": power_bundle_saving_amount,
+            "power_bundle_saving_pct": None,
+            "bundle_condition_text": merge_bundle_condition_text(
+                mobile_bundle_condition_text,
+                power_bundle_condition_text,
+            ),
             "byo_modem_allowed": modem_details.get("byo_modem_allowed"),
             "modem_rental_available": modem_details.get("modem_rental_available"),
             "modem_rental_price": modem_details.get("modem_rental_price"),
