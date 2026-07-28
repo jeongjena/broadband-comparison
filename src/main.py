@@ -11,6 +11,8 @@ from provider.spark import get_spark_plans
 from provider.electric_kiwi import get_electric_kiwi_plans
 from provider.wireless_nation import get_wireless_nation_plans
 
+from storage.connection import get_connection
+from storage.schema import create_tables
 
 ACTIVE_PROVIDERS = [
     ("2degrees", get_twodegrees_plans),
@@ -38,6 +40,12 @@ def print_plan(plan):
 
 
 def main():
+    conn = get_connection()
+    try:
+        create_tables(conn)
+    finally:
+        conn.close()
+
     for provider_name, fetch_plans in ACTIVE_PROVIDERS:
         print(f"{provider_name} Plan:\n")
 
