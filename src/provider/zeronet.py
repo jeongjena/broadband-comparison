@@ -2,8 +2,8 @@
 Zeronet Broadband Plan Scraper
 
 Contributor: Markus Salvador (23203124)
-Version: 0.5
-Last Updated: 2026-06-09
+Version: 0.7
+Last Updated: 2026-07-29
 
 Retrieves broadband plan information from the Zeronet website using
 Selenium and BeautifulSoup. The scraper captures four page states:
