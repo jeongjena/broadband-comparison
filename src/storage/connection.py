@@ -1,8 +1,8 @@
 import sqlite3
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATABASE_PATH = BASE_DIR / "data" / "database.db"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATABASE_PATH = PROJECT_ROOT / "data" / "database.db"
 
 def get_connection():
     """ Open (or create) the database"""
