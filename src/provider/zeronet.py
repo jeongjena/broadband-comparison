@@ -2,8 +2,8 @@
 Zeronet Broadband Plan Scraper
 
 Contributor: Markus Salvador (23203124)
-Version: 0.5
-Last Updated: 2026-06-09
+Version: 0.7
+Last Updated: 2026-07-29
 
 Retrieves broadband plan information from the Zeronet website using
 Selenium and BeautifulSoup. The scraper captures four page states:
@@ -34,6 +34,7 @@ URL = "https://www.zeronet.co.nz/plans/"
 RAW_DIR = Path("data/raw")
 RAW_PATH = RAW_DIR / "zeronet.html"
 
+"""
 def find_hyperfibre_button(driver):
     return driver.find_element(
         By.XPATH,
@@ -41,7 +42,16 @@ def find_hyperfibre_button(driver):
         "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
         "'hyperfibre')]"
     )
-
+"""
+def find_hyperfibre_button(driver):
+    return WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((
+            By.XPATH,
+            "//button[contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'hyperfibre')]"
+        ))
+    )
 
 def click_hyperfibre_button(driver):
     hyperfibre_button = find_hyperfibre_button(driver)
@@ -60,8 +70,11 @@ def click_hyperfibre_button(driver):
 
     time.sleep(2)
 
-
-
+def load_plans_page(driver):
+    driver.get(URL)
+    WebDriverWait(driver, 15).until(
+        EC.presence_of_element_located((By.CLASS_NAME, "plan-card"))
+    )
 
 def fetch_zeronet_plans():
     # Load the Zeronet plans page and capture all pricing views required
@@ -81,75 +94,53 @@ def fetch_zeronet_plans():
         options=options
     )
     try:
-        driver.get(URL)
-
-        # wait until plan cards appear
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located(
-                (By.CLASS_NAME, "plan-card")
-            )
-        )
 
         all_html = []
 
-
+        load_plans_page(driver)
+        html_monthly = driver.page_source
         monthly_details = collect_selected_plan_details(driver)
-
-
         all_html.append({
             "billingFrequency": "Monthly",
-            "html": driver.page_source,
+            "html": html_monthly,
             "selectedPlanDetails": monthly_details
         })
         
+        load_plans_page(driver)
         click_hyperfibre_button(driver)
-
-        hyper_html = driver.page_source
-
-
+        WebDriverWait(driver, 10).until(
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, ".plan-card")) > 3
+        )
+        html_monthly_hyper = driver.page_source
         monthly_hyper_details = collect_selected_plan_details(driver)
-
-
         all_html.append({
             "billingFrequency": "Monthly",
-            "html": hyper_html,
+            "html": html_monthly_hyper,
             "selectedPlanDetails": monthly_hyper_details
         })
 
-        weekly_button = driver.find_element(
-            By.CSS_SELECTOR,
-            'label[for="switch-frequency-Weekly"]'
+        load_plans_page(driver)
+        click_hyperfibre_button(driver)
+        WebDriverWait(driver, 10).until(
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, ".plan-card")) > 3
         )
 
-        driver.execute_script(
-            "arguments[0].click();",
-            weekly_button
+        weekly_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, 'label[for="switch-frequency-Weekly"]')
+            )
         )
-
+        driver.execute_script("arguments[0].click();", weekly_button)
         time.sleep(1)
 
-
+        html_weekly = driver.page_source
         weekly_details = collect_selected_plan_details(driver)
-
         all_html.append({
             "billingFrequency": "Weekly",
-            "html": driver.page_source,
+            "html": html_weekly,
             "selectedPlanDetails": weekly_details
         })
-
-        click_hyperfibre_button(driver)
-
-        hyper_html = driver.page_source
-
-
-        weekly_hyper_details = collect_selected_plan_details(driver)
-
-        all_html.append({
-            "billingFrequency": "Weekly",
-            "html": hyper_html,
-            "selectedPlanDetails": weekly_hyper_details
-        })
-        
+                
         RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
         RAW_PATH.write_text(driver.page_source, encoding="utf-8")
 
@@ -202,6 +193,7 @@ def collect_selected_plan_details(driver):
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "plan-card"))
                 )
+                time.sleep(0.5) # Small buffer 
             else:
                 close_buttons = driver.find_elements(
                     By.CSS_SELECTOR,
