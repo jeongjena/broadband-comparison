@@ -12,7 +12,7 @@ import sys
 import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -26,7 +26,6 @@ from storage.connection import get_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "powerbi_export.xlsx"
-LOCAL_TIMEZONE = ZoneInfo("Pacific/Auckland")
 
 HEADER_FILL = PatternFill("solid", start_color="2F5496")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
@@ -173,6 +172,18 @@ def _latest_snapshot_ids(snapshots):
     return ids[-2], ids[-1]
 
 
+def _get_auckland_timezone():
+    """Return the timezone used for Auckland date-based selection."""
+
+    try:
+        return ZoneInfo("Pacific/Auckland")
+    except ZoneInfoNotFoundError as exc:
+        raise RuntimeError(
+            "Date-based snapshot selection requires timezone data. "
+            "Install it with: python -m pip install tzdata"
+        ) from exc
+
+
 def _snapshot_local_date(snapshot):
     """Return the snapshot timestamp as a Pacific/Auckland calendar date."""
 
@@ -180,7 +191,7 @@ def _snapshot_local_date(snapshot):
     if timestamp.tzinfo is None:
         # SQLite CURRENT_TIMESTAMP values are stored as naive UTC timestamps.
         timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.astimezone(LOCAL_TIMEZONE).date()
+    return timestamp.astimezone(_get_auckland_timezone()).date()
 
 
 def _normalise_date(value):
@@ -557,13 +568,16 @@ def main():
     args = _parse_args()
     conn = get_connection()
     try:
-        result = export_powerbi(
-            conn,
-            old_snapshot_id=args.old_snapshot,
-            new_snapshot_id=args.new_snapshot,
-            old_date=args.old_date,
-            new_date=args.new_date,
-        )
+        try:
+            result = export_powerbi(
+                conn,
+                old_snapshot_id=args.old_snapshot,
+                new_snapshot_id=args.new_snapshot,
+                old_date=args.old_date,
+                new_date=args.new_date,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise SystemExit(f"[EXPORT ERROR] {exc}") from exc
     finally:
         conn.close()
 
