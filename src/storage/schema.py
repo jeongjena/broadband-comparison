@@ -5,17 +5,17 @@ Contributor: Markus Salvador (23203124)
 Version: 0.1
 Last Updated: 2026-07-29
 
-Creates the SQLite tables used to store extracted broadband plan information, 
+Creates the SQLite tables used to store extracted broadband plan information,
 as defined in the Database Architecture document and the Proposed Standardised
-Broadband Plan Model. It contains only the snapshot, provider, plan, and promotion. 
+Broadband Plan Model. It contains snapshot, provider, provider-run, plan, and
+promotion data.
 
-This ONLY builds the schmema, it does NOT insert any data. 
+This only builds the schema; it does not insert any data.
 """
 
-from storage.connection import get_connection
 
 def create_tables(conn):
-    """Creates all four tables if they don't already exist in the database."""
+    """Create the database tables if they do not already exist."""
 
     cur = conn.cursor()
 
@@ -23,7 +23,9 @@ def create_tables(conn):
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snapshot (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'complete', 'partial', 'failed'))
         )
     """)
 
@@ -35,10 +37,25 @@ def create_tables(conn):
         )
     """)
 
+    # Provider run: outcome for one provider within an extraction run
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS provider_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL
+                REFERENCES snapshot(id) ON DELETE CASCADE,
+            provider_id INTEGER NOT NULL REFERENCES provider(id),
+            status TEXT NOT NULL
+                CHECK (status IN ('success', 'failed')),
+            plan_count INTEGER NOT NULL DEFAULT 0 CHECK (plan_count >= 0),
+            error_message TEXT,
+            UNIQUE (snapshot_id, provider_id)
+        )
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS plan (
             id                                    INTEGER PRIMARY KEY AUTOINCREMENT,
-            snapshot_id                           INTEGER NOT NULL REFERENCES snapshot(id),
+            snapshot_id                           INTEGER NOT NULL REFERENCES snapshot(id) ON DELETE CASCADE,
             provider_id                           INTEGER NOT NULL REFERENCES provider(id),
  
             -- Core plan info
@@ -92,7 +109,8 @@ def create_tables(conn):
             -- Metadata
             data_source                           TEXT,
             source_url                            TEXT,
-            collected_at                          TEXT
+            collected_at                          TEXT,
+            raw_offer_text                        TEXT
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_snapshot_id ON plan(snapshot_id)")
@@ -102,12 +120,11 @@ def create_tables(conn):
     cur.execute("""
         CREATE TABLE IF NOT EXISTS promotion (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plan_id INTEGER NOT NULL REFERENCES plan(id),
+            plan_id INTEGER NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
             promo_price REAL,
             promo_period INTEGER,
             promo_period_unit TEXT,
-            promotion_text TEXT,
-            raw_offer_text TEXT
+            promotion_text TEXT
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_promotion_plan_id ON promotion(plan_id)")
