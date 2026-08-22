@@ -1,3 +1,5 @@
+import smtplib
+
 from provider.twodegrees import get_twodegrees_plans
 from provider.skinny import get_skinny_plans
 from provider.mercury import get_mercury_plans
@@ -10,6 +12,10 @@ from provider.spark import get_spark_plans
 from provider.electric_kiwi import get_electric_kiwi_plans
 from provider.wireless_nation import get_wireless_nation_plans
 
+from processing.snapshot_selection import get_previous_snapshot_id
+from processing.comparison import compare_snapshots
+from export.powerbi_exporter import export_powerbi
+from alert.alert import send_change_alert
 from storage.connection import get_connection
 from storage.repository import (
     create_snapshot,
@@ -97,9 +103,61 @@ def run_collection(conn, providers=ACTIVE_PROVIDERS):
 
 def main():
     conn = get_connection()
+
     try:
         create_tables(conn)
-        run_collection(conn)
+
+        current_snapshot_id, status = run_collection(conn)
+
+        previous_snapshot_id = get_previous_snapshot_id(
+            conn,
+            current_snapshot_id,
+        )
+
+        if previous_snapshot_id is None:
+            print("[COMPARE] No previous finalised snapshot available.")
+
+            result = export_powerbi(conn)
+
+            print(f"[EXPORT] Saved Power BI workbook: {result['output_path']}")
+            return
+
+        changes = compare_snapshots(
+            conn,
+            previous_snapshot_id,
+            current_snapshot_id,
+        )
+
+        print(
+            f"[COMPARE] Snapshot {previous_snapshot_id} "
+            f"-> {current_snapshot_id}: {len(changes)} change(s)"
+        )
+
+        result = export_powerbi(
+            conn,
+            old_snapshot_id=previous_snapshot_id,
+            new_snapshot_id=current_snapshot_id,
+            changes=changes,
+        )
+
+        print(f"[EXPORT] Saved Power BI workbook: {result['output_path']}")
+
+        # Keep email delivery failures separate from collection and export results.
+        try:
+            alert = send_change_alert(changes)
+
+            # Avoid sending emails when there are no reportable changes.
+            if alert["should_send"]:
+                print("[ALERT] Alert sent.")
+            else:
+                print("[ALERT] No alert sent - no reportable changes detected.")
+
+        except RuntimeError as exc:
+            print(f"[ALERT] Not sent: {exc}")
+
+        except (smtplib.SMTPException, OSError) as exc:
+            print(f"[ALERT] Email delivery failed: {exc}")
+
     finally:
         conn.close()
 
