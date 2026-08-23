@@ -10,9 +10,7 @@ import argparse
 import os
 import sys
 import tempfile
-from datetime import date, datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -20,6 +18,10 @@ from openpyxl.styles import Font, PatternFill
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from processing.snapshot_selection import (
+    get_latest_snapshot_ids,
+    require_selectable_snapshot,
+)
 from processing.comparison import compare_snapshots
 from storage.connection import get_connection
 
@@ -155,114 +157,32 @@ def _load_promotions(conn):
     )
 
 
-def _latest_snapshot_ids(snapshots):
-    """Return the latest two finalised snapshot IDs by insertion order."""
-
-    # A running snapshot may contain only some providers, so it must not be
-    # presented as the latest completed collection or used for comparison.
-    ids = [
-        snapshot["id"]
-        for snapshot in snapshots
-        if snapshot["status"] != "running"
-    ]
-    if not ids:
-        return None, None
-    if len(ids) == 1:
-        return None, ids[-1]
-    return ids[-2], ids[-1]
-
-
-def _get_auckland_timezone():
-    """Return the timezone used for Auckland date-based selection."""
-
-    try:
-        return ZoneInfo("Pacific/Auckland")
-    except ZoneInfoNotFoundError as exc:
-        raise RuntimeError(
-            "Date-based snapshot selection requires timezone data. "
-            "Install it with: python -m pip install tzdata"
-        ) from exc
-
-
-def _snapshot_local_date(snapshot):
-    """Return the snapshot timestamp as a Pacific/Auckland calendar date."""
-
-    timestamp = datetime.fromisoformat(str(snapshot["timestamp"]).replace("Z", "+00:00"))
-    if timestamp.tzinfo is None:
-        # SQLite CURRENT_TIMESTAMP values are stored as naive UTC timestamps.
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.astimezone(_get_auckland_timezone()).date()
-
-
-def _normalise_date(value):
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(value)
-
-
-def _snapshot_id_by_date(snapshots, selected_date):
-    """Return the latest non-running snapshot on one Auckland date."""
-
-    selected_date = _normalise_date(selected_date)
-    matches = [
-        snapshot["id"]
-        for snapshot in snapshots
-        if snapshot["status"] != "running"
-        and _snapshot_local_date(snapshot) == selected_date
-    ]
-    if not matches:
-        raise ValueError(
-            f"No finalised snapshot exists on {selected_date.isoformat()} "
-            "in Pacific/Auckland time"
-        )
-    return matches[-1]
-
-
-def _require_selectable_snapshot(snapshots, snapshot_id):
-    snapshot = next(
-        (item for item in snapshots if item["id"] == snapshot_id),
-        None,
-    )
-    if snapshot is None:
-        raise ValueError(f"Snapshot {snapshot_id} does not exist")
-    if snapshot["status"] == "running":
-        raise ValueError(f"Snapshot {snapshot_id} is still running")
-    return snapshot_id
-
-
 def _select_snapshot_ids(
-    snapshots,
+    conn,
     old_snapshot_id=None,
     new_snapshot_id=None,
-    old_date=None,
-    new_date=None,
 ):
-    """Select comparison snapshots automatically, by ID, or by local date."""
+    """Select snapshots automatically or by explicit IDs."""
 
-    has_any_id = old_snapshot_id is not None or new_snapshot_id is not None
-    has_any_date = old_date is not None or new_date is not None
+    has_any_id = (
+        old_snapshot_id is not None
+        or new_snapshot_id is not None
+    )
 
-    if has_any_id and has_any_date:
-        raise ValueError("Select snapshots by ID or by date, not both")
     if has_any_id:
         if old_snapshot_id is None or new_snapshot_id is None:
             raise ValueError("Both old and new snapshot IDs are required")
+
         selected = (
-            _require_selectable_snapshot(snapshots, old_snapshot_id),
-            _require_selectable_snapshot(snapshots, new_snapshot_id),
-        )
-    elif has_any_date:
-        if old_date is None or new_date is None:
-            raise ValueError("Both old and new dates are required")
-        selected = (
-            _snapshot_id_by_date(snapshots, old_date),
-            _snapshot_id_by_date(snapshots, new_date),
+            require_selectable_snapshot(conn, old_snapshot_id),
+            require_selectable_snapshot(conn, new_snapshot_id),
         )
     else:
-        selected = _latest_snapshot_ids(snapshots)
+        selected = get_latest_snapshot_ids(conn)
 
     if selected[0] is not None and selected[0] == selected[1]:
         raise ValueError("Two different snapshots are required for comparison")
+
     return selected
 
 
@@ -406,8 +326,7 @@ def export_powerbi(
     output_path=DEFAULT_OUTPUT_PATH,
     old_snapshot_id=None,
     new_snapshot_id=None,
-    old_date=None,
-    new_date=None,
+    changes=None,
 ):
     """Rebuild the workbook from the current database contents.
 
@@ -424,18 +343,17 @@ def export_powerbi(
     plans = _load_plans(conn)
     promotions = _load_promotions(conn)
     old_snapshot_id, current_snapshot_id = _select_snapshot_ids(
-        snapshots,
+        conn,
         old_snapshot_id=old_snapshot_id,
         new_snapshot_id=new_snapshot_id,
-        old_date=old_date,
-        new_date=new_date,
     )
     current_plans = _load_current_plans(conn, current_snapshot_id)
-    changes = (
-        compare_snapshots(conn, old_snapshot_id, current_snapshot_id)
-        if old_snapshot_id is not None
-        else []
-    )
+    if changes is None:
+        changes = (
+            compare_snapshots(conn, old_snapshot_id, current_snapshot_id)
+            if old_snapshot_id is not None
+            else []
+        )
     recent_changes = _summarize_changes(changes)
 
     workbook = Workbook()
@@ -557,8 +475,6 @@ def _parse_args():
     )
     parser.add_argument("--old-snapshot", type=int)
     parser.add_argument("--new-snapshot", type=int)
-    parser.add_argument("--old-date", help="Pacific/Auckland date in YYYY-MM-DD format")
-    parser.add_argument("--new-date", help="Pacific/Auckland date in YYYY-MM-DD format")
     return parser.parse_args()
 
 
@@ -573,8 +489,6 @@ def main():
                 conn,
                 old_snapshot_id=args.old_snapshot,
                 new_snapshot_id=args.new_snapshot,
-                old_date=args.old_date,
-                new_date=args.new_date,
             )
         except (RuntimeError, ValueError) as exc:
             raise SystemExit(f"[EXPORT ERROR] {exc}") from exc
