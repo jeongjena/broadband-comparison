@@ -3,7 +3,7 @@ Wireless Nation Broadband Plan Scraper
 
 Contributor: Riches Chau (21155808), Markus Salvador (23203124)
 Version: 0.6
-Last Updated: 2026-08-27
+Last Updated: 2026-08-30
 
 Retrieves home wireless, family fibre, and 5G home internet broadband plan information
 from the Wireless Nation website using requests and BeautifulSoup.
@@ -24,10 +24,14 @@ from processing.standardizer import clean_text, standardize_plans
 HOME_WIRELESS_URL = "https://wirelessnation.co.nz/home-wireless-broadband/"
 FAMILY_FIBRE_URL = "https://wirelessnation.co.nz/family-fibre/"
 FIVE_G_HOME_URL = "https://wirelessnation.co.nz/5g-home-internet/"
+HOME_ROAM_URL = "https://wirelessnation.co.nz/home-roam-bundle/"
+
 # Wireless Nation has separate residential product pages.
-# Home Wireless, Family Fibre, and 5G Home Internet are collected together so the provider output
-# is one product line.
-URLS = [HOME_WIRELESS_URL, FAMILY_FIBRE_URL, FIVE_G_HOME_URL]
+# All four are fetched together so provider output isn't limited to one
+# product line; Home & Roam's cleaned output is dropped before it reaches
+# the returned plans (see clean_wireless_nation_plans) because it bundles
+# Home Fibre with Portable WiFi rather than being a standalone plan
+URLS = [HOME_WIRELESS_URL, FAMILY_FIBRE_URL, FIVE_G_HOME_URL, HOME_ROAM_URL]
 
 RAW_DIR = Path("data/raw")
 RAW_PATH = RAW_DIR / "wirelessnation.html"
@@ -106,6 +110,14 @@ def is_family_fibre_heading(line):
         )
     )
 
+def is_home_roam_heading(line):
+    return bool(
+        re.match(
+            r"^Home\s*&\s*Roam(?:\s+Unlimited)?$",
+            normalise_text(line),
+            re.IGNORECASE,
+        )
+    )
 
 def split_plan_blocks(lines, heading_test):
     # Plan cards are extracted from visible page text rather than hardcoded rows.
@@ -549,10 +561,93 @@ def clean_five_g_home_plans(html, source_url):
         "source_url": source_url,
     }]
 
+def extract_home_roam_portable_data(text):
+    text = normalise_text(text)
+
+    if re.search(r"Unlimited\s+Portable\s+WiFi", text, re.IGNORECASE):
+        return "Unlimited"
+
+    match = re.search(r"(\d+)\s*GB\s+Portable\s+WiFi", text, re.IGNORECASE)
+    return f"{match.group(1)}GB" if match else None
+
+
+def extract_home_roam_modem_price(text):
+    match = re.search(
+        r"\$\s*(\d+(?:\.\d{1,2})?)\s*\(includes savings of",
+        normalise_text(text),
+        re.IGNORECASE,
+    )
+    return as_number(match.group(1)) if match else None
+
+
+def extract_home_roam_5g_upgrade_text(text):
+    match = re.search(
+        r"Optional:\s*Upgrade to the 5G modem bundle setup for\s*\$\s*(\d+(?:\.\d{1,2})?)",
+        normalise_text(text),
+        re.IGNORECASE,
+    )
+    return normalise_text(match.group(0)) if match else None
+
+
+def extract_home_roam_promo_text(text):
+    match = re.search(
+        r"PROMO:\s*\$\s*\d+(?:\.\d{1,2})?\s*modem discount with a 12-month term\.\s*Use code\s*\w+",
+        normalise_text(text),
+        re.IGNORECASE,
+    )
+    return normalise_text(match.group(0)) if match else None
+
+
+def clean_home_roam_plans(html, source_url):
+    # Home & Roam bundles Home Fibre Saver with Portable WiFi as a single
+    # combined monthly product - it is not a standalone broadband plan.
+    # These rows are intentionally excluded from the standard broadband
+    # comparison in clean_wireless_nation_plans() below. The extraction is
+    # written now so it's ready once the project defines how bundle-type
+    # products should be modelled and reported.
+    lines = clean_lines_from_html(html)
+    blocks = split_plan_blocks(lines, is_home_roam_heading)
+
+    bundle_plans = []
+
+    for block_lines in blocks:
+        block_text = normalise_text(" ".join(block_lines))
+        plan_name = block_lines[0]
+        down_speed, up_speed = extract_fibre_speeds(block_text)
+        modem_price = extract_home_roam_modem_price(block_text)
+
+        bundle_plans.append({
+            "plan_name": plan_name,
+            "connection_type": "Bundle",
+            "price": extract_monthly_price(block_text),
+            "billing_frequency": "Monthly",
+            "data_allowance": build_text(
+                "Unlimited Home Fibre",
+                extract_home_roam_portable_data(block_text),
+            ),
+            "speed_down_mbps": down_speed,
+            "speed_up_mbps": up_speed,
+            "contract_type": "fixed",
+            "contract_term_months": 12,
+            "shipping_fee": extract_shipping_fee(block_text),
+            "modem_purchase_price": modem_price,
+            "modem_purchase_condition_text": build_text(
+                "Two modems included: one 4G Portable and one Home Fibre "
+                "modem, on a 12-month contract.",
+                extract_home_roam_5g_upgrade_text(block_text),
+            ),
+            "promotion_text": extract_home_roam_promo_text(block_text),
+            "raw_offer_text": "Bundles Home Fibre Saver with Portable WiFi as a single monthly plan.",
+            "data_source": "STATIC_HTML",
+            "source_url": source_url,
+        })
+
+    return bundle_plans
 
 def clean_wireless_nation_plans(pages):
     # Dispatch each fetched page to the correct cleaner based on its source URL.
     cleaned_plans = []
+    home_roam_plans = []
 
     for page in pages:
         source_url = page.get("url")
@@ -564,6 +659,15 @@ def clean_wireless_nation_plans(pages):
             cleaned_plans.extend(clean_family_fibre_plans(html, source_url))
         elif source_url == FIVE_G_HOME_URL:
             cleaned_plans.extend(clean_five_g_home_plans(html, source_url))
+        elif source_url == HOME_ROAM_URL:
+            home_roam_plans.extend(clean_home_roam_plans(html, source_url))
+
+    if home_roam_plans:
+        print(
+            f"[INFO] Wireless Nation: {len(home_roam_plans)} Home & Roam bundle "
+            "plan(s) extracted but excluded from the broadband comparison "
+            "(bundle product, not a standalone broadband plan)."
+        )
 
     return cleaned_plans
 
