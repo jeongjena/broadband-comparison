@@ -102,6 +102,7 @@ def run_collection(conn, providers=ACTIVE_PROVIDERS):
 
 
 def main():
+
     conn = get_connection()
 
     try:
