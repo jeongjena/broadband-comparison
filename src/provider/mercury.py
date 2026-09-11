@@ -336,8 +336,8 @@ def clean_mercury_plans(html):
         bundle_text = extract_bundle_text(feature_text)
 
         # Mercury is an energy company — power and gas bundles are always available.
-        # Saving amounts/pct are bundle-level offers, not extractable per plan card.
-        power_bundle_saving_amount = extract_bundle_saving_amount(feature_text)
+        # Half-price for first 12 months when bundled with electricity (Fibre Lite excluded).
+        power_bundle_saving_amount = None if plan_name == "Fibre Lite" else round(price * 0.5, 2)
 
         # Wireless: free router rental + $14.95 P&H
         # Fibre: eero routers available for purchase + $14.95 P&H
@@ -378,7 +378,9 @@ def clean_mercury_plans(html):
                 "contract_condition_text": feature_text,
                 "power_bundle_available": True,
                 "power_bundle_saving_amount": power_bundle_saving_amount,
-                "power_bundle_saving_pct": None,
+                # Fibre Lite is not eligible for the 12-months half-price bundle offer.
+                # All other plans (FibreClassic, FibreMax, Wireless) get 50% off for 12 months.
+                "power_bundle_saving_pct": None if plan_name == "Fibre Lite" else 50,
                 "gas_bundle_available": True,
                 "gas_bundle_saving_amount": None,
                 "mobile_bundle_available": True,
