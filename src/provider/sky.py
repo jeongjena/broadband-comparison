@@ -206,6 +206,17 @@ def extract_then_price(text):
     return float(match.group(1)) if match else None
 
 
+def extract_saving_amount(text):
+    """
+    Extracts saving amount from strings like 'Save $10/mth for 12 months' → 10.0
+    Used when API returns the promo price as 'price' without acquistionOfferPrice.
+    """
+    if not text:
+        return None
+    match = re.search(r'save \$(\d+\.?\d*)/mth', text, re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
 def extract_promo_period(text):
     """
     Extracts the promo duration in months from strings like 'For 12 months'.
@@ -264,11 +275,30 @@ def clean_sky_plans(data):
         if regular_price is None:
             regular_price = extract_then_price(feature_text)
 
+        # If API returned only one price but discountText says "Save $X/mth",
+        # the API price is the promo rate — derive standard price from the saving.
+        if promo_price is None and regular_price is not None:
+            saving = extract_saving_amount(discount_text)
+            if saving:
+                promo_price = regular_price
+                regular_price = round(regular_price + saving, 2)
+
         # Only set promo_period when there is an actual promo price
         promo_period = extract_promo_period(feature_text) if promo_price else None
+        # Fallback: Sky promos are always 12 months
+        if promo_price and promo_period is None:
+            promo_period = 12
 
-        # Only set promotion_text when there is an actual price discount
-        promotion_text = discount_text if promo_price else None
+        # Build promotion_text from discountText, or construct if API didn't provide it
+        if promo_price:
+            if discount_text:
+                promotion_text = discount_text
+            else:
+                saving_amount = round(regular_price - promo_price, 2)
+                promotion_text = f"Save ${saving_amount:.2f}/mth for {promo_period} months"
+        else:
+            promotion_text = None
+
         raw_offer_text = " | ".join(
             filter(
                 None,
@@ -328,13 +358,24 @@ def remove_duplicate_sky_plans(plans):
             unique_plans[key] = plan
             continue
 
-        existing_price = unique_plans[key].get("price")
-        new_price = plan.get("price")
+        existing = unique_plans[key]
+        existing_has_promo = existing.get("promo_price") is not None
+        new_has_promo = plan.get("promo_price") is not None
 
-        if existing_price is None:
+        if new_has_promo and not existing_has_promo:
+            # New entry has promo data; existing doesn't — prefer new
             unique_plans[key] = plan
-        elif new_price is not None and new_price < existing_price:
-            unique_plans[key] = plan
+        elif existing_has_promo and not new_has_promo:
+            # Existing has promo; new doesn't — keep existing
+            continue
+        else:
+            # Both or neither have promo — keep lower standard price
+            existing_price = existing.get("price")
+            new_price = plan.get("price")
+            if existing_price is None:
+                unique_plans[key] = plan
+            elif new_price is not None and new_price < existing_price:
+                unique_plans[key] = plan
 
     return list(unique_plans.values())
 
