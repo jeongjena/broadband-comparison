@@ -3,14 +3,13 @@ Genesis Broadband API Extractor
 
 Contributor: Markus Salvador (23203124)
 Version: 0.6
-Last Updated: 2026-06-13
+Last Updated: 2026-09-12
 
 Retrieves broadband plan information from the Genesis broadband API,
 extracts internet service plans, and transforms the results into the
 project's standardised format.
 """
 
-import re
 import requests
 from datetime import datetime
 from processing.standardizer import standardize_plans
@@ -47,20 +46,40 @@ def fetch_genesis_plans():
 
     return all_plans
 
-def extract_promotion_text(features):
-    if not features:
-        return None
+OFFERS_URL = "https://api.2degrees.nz/sales/v3/catalog/offers/v2?businessGroup=genesis&salesChannel=OnlineSignup"
 
-    parts = features.lower().split("|")
-    keywords = ["off", "free", "discount", "offer", "promo"]
-
-    matches = [p.strip() for p in parts if any(k in p for k in keywords)]
-
-    return " | ".join(matches) if matches else None
+def fetch_genesis_offers():
+    res = requests.get(OFFERS_URL, headers=headers)
+    res.raise_for_status()
+    return res.json()
 
 
+def offer_applies_to_plan(offer, plan_service_type):
+    """
+    An offer applies to a plan if it qualifies "access" services generally
+    (serviceType is null) or names this plan's exact serviceType.
+    Confirmed against the live offers/v2 endpoint on 2026-09-12.
+    """
+    for qualification in offer.get("offerQualifications", []):
+        for service in qualification.get("serviceGroupServices", []):
+            if service.get("service") != "access":
+                continue
+            qualifying_type = service.get("serviceType")
+            if qualifying_type is None or qualifying_type == plan_service_type:
+                return True
+    return False
 
-def clean_genesis_plans(plans):
+
+def extract_promotion_text(plan_service_type, offers):
+    matches = [
+        offer.get("billingDescription")
+        for offer in offers
+        if offer_applies_to_plan(offer, plan_service_type)
+    ]
+    matches = [m for m in matches if m]
+    return " | ".join(dict.fromkeys(matches)) if matches else None
+
+def clean_genesis_plans(plans, offers):
     cleaned_plans = []
     # Track duplicates based on plan name and speed
     seen = set() 
@@ -70,17 +89,6 @@ def clean_genesis_plans(plans):
         plan = item.get("plan", {})
 
         speeds = product.get("coreProductBroadbandAverageSpeeds", {})
-
-        features = " | ".join(
-            filter(
-                None,
-                [
-                    product.get("coreProductDescription"),
-                    plan.get("serviceType"),
-                    plan.get("segment")
-                ]
-            )
-        )
 
         charges = plan.get("charges", [])
 
@@ -118,7 +126,7 @@ def clean_genesis_plans(plans):
             "dataEntitlement": plan.get("dataCap") or "Unlimited",
             "downSpeed": speeds.get("averageSpeedDownMbps"),
             "upSpeed": speeds.get("averageSpeedUpMbps"),
-            "promotionText": extract_promotion_text(features),
+            "promotionText": extract_promotion_text(plan.get("serviceType"), offers),
             "contractTermMonths": plan.get("minimumContractTerm"),            
             "landlineAllowed": None,  # not provided by API
             "antennaRequired": None   # not provided by API
@@ -131,7 +139,8 @@ def clean_genesis_plans(plans):
 def get_genesis_plans():
     try:
         plans = fetch_genesis_plans()
-        cleaned = clean_genesis_plans(plans)
+        offers = fetch_genesis_offers()
+        cleaned = clean_genesis_plans(plans, offers)
 
         standardized = [] 
 

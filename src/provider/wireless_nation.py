@@ -429,6 +429,7 @@ def clean_family_fibre_plans(html, source_url):
         plan_name = block_lines[0]
         down_speed, up_speed = extract_fibre_speeds(block_text)
         modem_price = extract_modem_purchase_price(block_text)
+        embedded_plan_price = extract_embedded_plan_price(block_text)
         one_month_free_text = extract_family_fibre_promotion_text(block_text)
         modem_promo_text = (
             f"Free modem on a 12-month term (or ${modem_price} on open term)"
@@ -470,8 +471,8 @@ def clean_family_fibre_plans(html, source_url):
             "raw_offer_text": build_text(
                 extract_plan_description(block_lines),
                 extract_plume_text(block_text),
-                f"Standard {plan_name.replace('Family ', '')} plan available for ${extract_embedded_plan_price(block_text)}/month without Plume Smart Features."
-                if extract_embedded_plan_price(block_text) is not None
+                f"Standard {plan_name.replace('Family ', '')} plan available for ${embedded_plan_price}/month without Plume Smart Features."
+                if embedded_plan_price is not None
                 else None,
             ),
             "data_source": "STATIC_HTML",
