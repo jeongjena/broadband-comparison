@@ -1,9 +1,15 @@
+import re
+import sys
+import requests
 from datetime import datetime
 from pathlib import Path
-import re
 
-import requests
 from bs4 import BeautifulSoup
+
+_src_path = Path(__file__).resolve().parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
+
 from processing.standardizer import clean_text, standardize_plans, infer_connection_type
 
 
@@ -82,6 +88,32 @@ def extract_download_speed(card):
                 continue
             up = float(match.group(2)) if match.lastindex and match.lastindex >= 2 and match.group(2) else None
             return down, float(up) if up is not None else None
+
+    return None, None
+
+
+def apply_speed_fallback(plan_name, connection_type, speed_down, speed_up):
+    """Apply fallback speeds from SKINNY_FALLBACK_SPEEDS when extraction fails."""
+    if speed_down is not None:
+        return speed_down, speed_up
+
+    if not plan_name:
+        return None, None
+
+    plan_lower = plan_name.lower()
+
+    if "ultra" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Ultra"]
+    if "500" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Fibre 500"]
+    if "unlimited fibre" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Fibre 500"]
+    if "vdsl" in plan_lower or connection_type == "VDSL":
+        return SKINNY_FALLBACK_SPEEDS["VDSL"]
+    if "adsl" in plan_lower or connection_type == "ADSL":
+        return SKINNY_FALLBACK_SPEEDS["ADSL"]
+    if "4g" in plan_lower or "wireless" in plan_lower or connection_type == "Wireless":
+        return (44, 20)
 
     return None, None
 
@@ -367,6 +399,7 @@ def clean_skinny_plans(html):
         connection_type = infer_connection_type_from_card(card)
         feature_text = extract_feature_text(card)
         speed_down, speed_up = extract_download_speed(card)
+        speed_down, speed_up = apply_speed_fallback(plan_name, connection_type, speed_down, speed_up)
 
         combined_promo_text = " | ".join(
             filter(None, [raw_promotion_text, feature_text])
