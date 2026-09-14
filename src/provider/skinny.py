@@ -1,9 +1,15 @@
+import re
+import sys
+import requests
 from datetime import datetime
 from pathlib import Path
-import re
 
-import requests
 from bs4 import BeautifulSoup
+
+_src_path = Path(__file__).resolve().parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
+
 from processing.standardizer import clean_text, standardize_plans, infer_connection_type
 
 
@@ -86,6 +92,32 @@ def extract_download_speed(card):
     return None, None
 
 
+def apply_speed_fallback(plan_name, connection_type, speed_down, speed_up):
+    """Apply fallback speeds from SKINNY_FALLBACK_SPEEDS when extraction fails."""
+    if speed_down is not None:
+        return speed_down, speed_up
+
+    if not plan_name:
+        return None, None
+
+    plan_lower = plan_name.lower()
+
+    if "ultra" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Ultra"]
+    if "500" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Fibre 500"]
+    if "unlimited fibre" in plan_lower:
+        return SKINNY_FALLBACK_SPEEDS["Fibre 500"]
+    if "vdsl" in plan_lower or connection_type == "VDSL":
+        return SKINNY_FALLBACK_SPEEDS["VDSL"]
+    if "adsl" in plan_lower or connection_type == "ADSL":
+        return SKINNY_FALLBACK_SPEEDS["ADSL"]
+    if "4g" in plan_lower or "wireless" in plan_lower or connection_type == "Wireless":
+        return (44, 20)
+
+    return None, None
+
+
 def parse_promotion(promo_text):
     if not promo_text:
         return None, None, None
@@ -109,7 +141,14 @@ def parse_promotion(promo_text):
 
     if free_match:
         promo_period = int(free_match.group(1))
-        promo_period_unit = free_match.group(2)
+        raw_unit = free_match.group(2).lower()
+        # Normalize to singular unit
+        if raw_unit in ("days", "day"):
+            promo_period_unit = "days"
+        elif raw_unit in ("weeks", "week"):
+            promo_period_unit = "weeks"
+        else:
+            promo_period_unit = "months"
 
     contract_match = re.search(
         r"(\d+)\s*[- ]?\s*month[s]?\s*term",
@@ -367,6 +406,7 @@ def clean_skinny_plans(html):
         connection_type = infer_connection_type_from_card(card)
         feature_text = extract_feature_text(card)
         speed_down, speed_up = extract_download_speed(card)
+        speed_down, speed_up = apply_speed_fallback(plan_name, connection_type, speed_down, speed_up)
 
         combined_promo_text = " | ".join(
             filter(None, [raw_promotion_text, feature_text])
