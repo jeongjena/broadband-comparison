@@ -2,8 +2,8 @@
 Contact Broadband API Extractor
 
 Contributor: Markus Salvador (23203124)
-Version: 0.4
-Last Updated: 2026-06-12
+Version: 0.5
+Last Updated: 2026-09-12
 
 Retrieves broadband plan information from the Contact API and
 transforms the results into the project's standardised format.
@@ -107,6 +107,21 @@ def clean_contact_plans(plans):
 
     cleaned_plans = []
     seen = set() # Track duplicate plan variants. 
+
+    
+    """
+    Contact doesn't expose power or gas bundle savings anywhere in its API, 
+    checked the plan list, final offerings, even the broadband bundle 
+    plan's own offer array, and nothing shows up. 
+
+    These numbers are copied from the marketing page:
+    "Save $5 a month on broadband bundled with electricity or $10 when you 
+    bundle electricity and gas on the Broadband Bundle Plan."
+    https://contact.co.nz/personal/broadband - checked on 12th Sept 2026
+
+    If contact changes this deal, we wont know unless someone manually 
+    checks the page again.
+    """
 
     for item in plans:
         price_str = item.get("BundlePrice", "")

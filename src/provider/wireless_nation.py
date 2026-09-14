@@ -3,7 +3,7 @@ Wireless Nation Broadband Plan Scraper
 
 Contributor: Riches Chau (21155808), Markus Salvador (23203124)
 Version: 0.6
-Last Updated: 2026-08-30
+Last Updated: 2026-09-12
 
 Retrieves home wireless, family fibre, and 5G home internet broadband plan information
 from the Wireless Nation website using requests and BeautifulSoup.
@@ -339,7 +339,7 @@ def extract_early_termination_condition_text(page_text):
 
 def extract_family_fibre_promotion_text(text):
     match = re.search(
-        r"PROMO:\s*One Month Free on any Family Fibre plan with a 12-month term\.\s*Use code\s*FF1MONTH\s*at signup",
+        r"PROMO:\s*ONE MONTH FREE with a 12-month term\.\s*Use code\s*(\w+)\s*at signup",
         normalise_text(text),
         re.IGNORECASE,
     )
@@ -429,7 +429,14 @@ def clean_family_fibre_plans(html, source_url):
         plan_name = block_lines[0]
         down_speed, up_speed = extract_fibre_speeds(block_text)
         modem_price = extract_modem_purchase_price(block_text)
-        promo_text = extract_family_fibre_promotion_text(block_text)
+        embedded_plan_price = extract_embedded_plan_price(block_text)
+        one_month_free_text = extract_family_fibre_promotion_text(block_text)
+        modem_promo_text = (
+            f"Free modem on a 12-month term (or ${modem_price} on open term)"
+            if modem_price is not None
+            else None
+        )
+        promo_text = build_text(one_month_free_text, modem_promo_text)
 
         # The one-month-free offer maps to promo fields. The standard monthly price
         # remains the plan price, while promo_price is recorded as 0 for the free month.
@@ -442,9 +449,9 @@ def clean_family_fibre_plans(html, source_url):
             "data_allowance": extract_data_allowance(block_text),
             "speed_down_mbps": down_speed,
             "speed_up_mbps": up_speed,
-            "promo_price": 0 if promo_text else None,
-            "promo_period": 1 if promo_text else None,
-            "promo_period_unit": "month" if promo_text else None,
+            "promo_price": 0 if one_month_free_text else None,
+            "promo_period": 1 if one_month_free_text else None,
+            "promo_period_unit": "month" if one_month_free_text else None,
             "contract_type": "fixed",
             "contract_term_months": 12,
             "contract_condition_text": contract_condition_text,
@@ -458,14 +465,14 @@ def clean_family_fibre_plans(html, source_url):
             "modem_rental_condition_text": "Free smart modem and setup on a 12-month term.",
             "modem_purchase_available": True if modem_price is not None else None,
             "modem_purchase_price": modem_price,
-            "modem_purchase_condition_text": "Free on a 12-month term or $199 on open term.",
+            "modem_purchase_condition_text": f"Free on a 12-month term or ${modem_price} on open term.",
             "antenna_required": None,
             "promotion_text": promo_text,
             "raw_offer_text": build_text(
                 extract_plan_description(block_lines),
                 extract_plume_text(block_text),
-                f"Standard {plan_name.replace('Family ', '')} plan available for ${extract_embedded_plan_price(block_text)}/month without Plume Smart Features."
-                if extract_embedded_plan_price(block_text) is not None
+                f"Standard {plan_name.replace('Family ', '')} plan available for ${embedded_plan_price}/month without Plume Smart Features."
+                if embedded_plan_price is not None
                 else None,
             ),
             "data_source": "STATIC_HTML",
@@ -481,6 +488,16 @@ def extract_5g_average_download_speed(text):
         re.IGNORECASE,
     )
     return as_number(match.group(1)) if match else None    
+
+def extract_5g_peak_speeds(text):
+    match = re.search(
+        r"Average peak download and upload speeds are\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*Mbps",
+        normalise_text(text),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None, None
+    return as_number(match.group(1)), as_number(match.group(2))
 
 def extract_5g_fixed_term_modem_price(text):
     # I.e "12-month term: $499 $299 SAVE $200"
@@ -525,6 +542,13 @@ def clean_five_g_home_plans(html, source_url):
     open_term_modem_price = extract_5g_open_term_modem_price(page_text)
     early_exit_text = extract_5g_early_exit_text(page_text)
     down_speed = extract_5g_average_download_speed(page_text)
+    peak_down_speed, peak_up_speed = extract_5g_peak_speeds(page_text)
+
+    modem_promo_text = (
+        f"Discounted modem price on a 12-month term (${fixed_term_modem_price} vs ${open_term_modem_price} on open term)"
+        if fixed_term_modem_price is not None and open_term_modem_price is not None
+        else None
+    )
 
     return [{
         "plan_name": "5G Home Internet",
@@ -532,8 +556,8 @@ def clean_five_g_home_plans(html, source_url):
         "price": price,
         "billing_frequency": "Monthly",
         "data_allowance": extract_data_allowance(page_text),
-        "speed_down_mbps": down_speed,
-        "speed_up_mbps": None,
+        "speed_down_mbps": peak_down_speed,
+        "speed_up_mbps": peak_up_speed,
         "contract_type": "open",
         "contract_term_months": None,
         "contract_condition_text": build_text(
@@ -550,7 +574,7 @@ def clean_five_g_home_plans(html, source_url):
             f"Open term: ${open_term_modem_price}" if open_term_modem_price is not None else None,
         ),
         "antenna_required": False,
-        "promotion_text": None,
+        "promotion_text": modem_promo_text,
         "raw_offer_text": build_text(
             "For fixed home use only - no portability.",
             f"5G averaging around {down_speed} Mbps download (Commerce Commission "
