@@ -23,6 +23,8 @@ headers = {
     "user-agent": "Mozilla/5.0"
 }
 
+BROADBAND_COMPONENT_SERVICES = {"Internet", "mobile2_wbb"}
+
 def fetch_genesis_plans():
     # line call
     res = requests.get(URL, headers=headers)
@@ -34,14 +36,16 @@ def fetch_genesis_plans():
     for service in data.get("coreServices", []):
         for product in service.get("coreProducts", []):
             for component in product.get("coreProductComponents", []):
-                # only keep internet plans
-                if component.get("coreProductComponentService") != "Internet":
-                    continue
+                component_service = component.get("coreProductComponentService")
                 
+                if component_service not in BROADBAND_COMPONENT_SERVICES:
+                    continue
+
                 for plan in component.get("coreProductComponentPlans", []):
                     all_plans.append({
                         "product": product,
-                        "plan": plan
+                        "plan": plan,
+                        "component_service": component_service,
                     })
 
     return all_plans
@@ -53,16 +57,22 @@ def fetch_genesis_offers():
     res.raise_for_status()
     return res.json()
 
+QUALIFYING_OFFER_SERVICES = {
+    "Internet": {"access"},
+    "mobile2_wbb": {"mobile2_wbb", "wirelessbroadband"},
+}
 
-def offer_applies_to_plan(offer, plan_service_type):
+def offer_applies_to_plan(offer, plan_service_type, component_service):
     """
     An offer applies to a plan if it qualifies "access" services generally
     (serviceType is null) or names this plan's exact serviceType.
     Confirmed against the live offers/v2 endpoint on 2026-09-12.
     """
+    qualifying_services = QUALIFYING_OFFER_SERVICES.get(component_service, set())
+
     for qualification in offer.get("offerQualifications", []):
         for service in qualification.get("serviceGroupServices", []):
-            if service.get("service") != "access":
+            if service.get("service") not in qualifying_services:
                 continue
             qualifying_type = service.get("serviceType")
             if qualifying_type is None or qualifying_type == plan_service_type:
@@ -70,14 +80,51 @@ def offer_applies_to_plan(offer, plan_service_type):
     return False
 
 
-def extract_promotion_text(plan_service_type, offers):
-    matches = [
-        offer.get("billingDescription")
+def get_matching_offers(plan_service_type, component_service, offers):
+    return [
+        offer
         for offer in offers
-        if offer_applies_to_plan(offer, plan_service_type)
+        if offer_applies_to_plan(offer, plan_service_type, component_service)
     ]
+
+
+def extract_promotion_text(matching_offers):
+    matches = [offer.get("billingDescription") for offer in matching_offers]
     matches = [m for m in matches if m]
     return " | ".join(dict.fromkeys(matches)) if matches else None
+
+
+def extract_promo_pricing(plan_price, matching_offers):
+    """
+    Builds promo_price/promo_period/promo_period_unit from the recurring
+    discount offer (category type "Promotion"), not one-off hardware
+    discounts like the modem offer. Confirmed against the live offers/v2
+    endpoint on 2026-09-15: Fibre plans get a percentage-off offer,
+    Wireless plans get a fixed-dollar-off offer, both for 3 months, and
+    the resulting promo prices match the intro pricing shown on the
+    live plan cards exactly.
+    """
+    if plan_price is None:
+        return None, None, None
+
+    for offer in matching_offers:
+        if offer.get("category", {}).get("type") != "Promotion":
+            continue
+
+        discount_percentage = offer.get("discountPercentage")
+        discount_amount = offer.get("monthlyAmountIncludingGst")
+
+        if discount_percentage is not None:
+            promo_price = round(plan_price * (1 - discount_percentage), 2)
+        elif discount_amount is not None:
+            promo_price = round(plan_price - discount_amount, 2)
+        else:
+            continue
+
+        return promo_price, offer.get("durationMonths"), "month"
+
+    return None, None, None
+
 
 def clean_genesis_plans(plans, offers):
     cleaned_plans = []
@@ -87,8 +134,9 @@ def clean_genesis_plans(plans, offers):
     for item in plans:
         product = item.get("product", {})
         plan = item.get("plan", {})
+        component_service = item.get("component_service")
 
-        speeds = product.get("coreProductBroadbandAverageSpeeds", {})
+        speeds = product.get("coreProductBroadbandAverageSpeeds") or {}
 
         charges = plan.get("charges", [])
 
@@ -108,28 +156,47 @@ def clean_genesis_plans(plans, offers):
             continue
         seen.add(key)
 
-
-        # Genesis identifies Hyperfibre plans using 2000 Mbps and
-        # 4000 Mbps service tiers.
         down_speed = speeds.get("averageSpeedDownMbps")
 
-        if down_speed and down_speed >= 2000:
+        if component_service == "mobile2_wbb":
+            connection_type = "Wireless"
+        elif down_speed and down_speed >= 2000:
+            # Genesis identifies Hyperfibre plans using 2000 Mbps and
+            # 4000 Mbps service tiers.
             connection_type = "Hyperfibre"
         else:
             connection_type = "Fibre"
+
+        # Wireless plans use 2147483647 (int32 max) as a "no cap" sentinel
+        # instead of null like Fibre plans do.
+        data_cap = plan.get("dataCap")
+        if data_cap is None or data_cap >= 2147483647:
+            data_entitlement = "Unlimited"
+        else:
+            data_entitlement = data_cap
+
+        matching_offers = get_matching_offers(
+            plan.get("serviceType"), component_service, offers
+        )
+        promo_price, promo_period, promo_period_unit = extract_promo_pricing(
+            price, matching_offers
+        )
 
         cleaned_plan = {
             "title": plan.get("planDescription"),
             "serviceType": connection_type,
             "price": price,
             "billingFrequency": billing_frequency,
-            "dataEntitlement": plan.get("dataCap") or "Unlimited",
-            "downSpeed": speeds.get("averageSpeedDownMbps"),
+            "dataEntitlement": data_entitlement,
+            "downSpeed": down_speed,
             "upSpeed": speeds.get("averageSpeedUpMbps"),
-            "promotionText": extract_promotion_text(plan.get("serviceType"), offers),
-            "contractTermMonths": plan.get("minimumContractTerm"),            
+            "promotionText": extract_promotion_text(matching_offers),
+            "promoPrice": promo_price,
+            "promoPeriod": promo_period,
+            "promoPeriodUnit": promo_period_unit,
+            "contractTermMonths": plan.get("minimumContractTerm"),
             "landlineAllowed": None,  # not provided by API
-            "antennaRequired": None   # not provided by API
+            "antennaRequired": None,  # not provided by API
         }
 
         cleaned_plans.append(cleaned_plan)
@@ -156,6 +223,9 @@ def get_genesis_plans():
                     speed_down_mbps=plan.get("downSpeed"),
                     speed_up_mbps=plan.get("upSpeed"),
                     promotion_text=plan.get("promotionText"),
+                    promo_price=plan.get("promoPrice"),
+                    promo_period=plan.get("promoPeriod"),
+                    promo_period_unit=plan.get("promoPeriodUnit"),
                     contract_term_months=plan.get("contractTermMonths"),
                     antenna_required=plan.get("antennaRequired"),
                     data_source="API",
