@@ -141,7 +141,14 @@ def parse_promotion(promo_text):
 
     if free_match:
         promo_period = int(free_match.group(1))
-        promo_period_unit = free_match.group(2)
+        raw_unit = free_match.group(2).lower()
+        # Normalize to singular unit
+        if raw_unit in ("days", "day"):
+            promo_period_unit = "days"
+        elif raw_unit in ("weeks", "week"):
+            promo_period_unit = "weeks"
+        else:
+            promo_period_unit = "months"
 
     contract_match = re.search(
         r"(\d+)\s*[- ]?\s*month[s]?\s*term",

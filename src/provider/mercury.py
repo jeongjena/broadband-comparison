@@ -6,9 +6,6 @@ import sys
 import requests
 from bs4 import BeautifulSoup
 
-# Fix import path when running as script (python3 src/provider/mercury.py) —
-# adds the "src" folder (parent of provider/) to sys.path so the sibling
-# "processing" package can be found. Same fix already used in twodegrees_llm.py.
 _src_path = Path(__file__).resolve().parent.parent
 if str(_src_path) not in sys.path:
     sys.path.insert(0, str(_src_path))
@@ -385,7 +382,11 @@ def clean_mercury_plans(html):
                 "gas_bundle_saving_amount": None,
                 "mobile_bundle_available": True,
                 "mobile_bundle_saving_amount": None,
-                "bundle_condition_text": bundle_text,
+                "bundle_condition_text": (
+                    None if plan_name == "Fibre Lite" else
+                    "Broadband + Mobile: 50% off the mobile plan for 12 months. "
+                    "Power + Broadband + Mobile: 50% off both broadband and mobile plans for 12 months."
+                ),
                 "byo_modem_allowed": None,
                 "modem_rental_available": modem_rental_available,
                 "modem_rental_price": modem_rental_price,

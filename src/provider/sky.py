@@ -150,11 +150,11 @@ def infer_contract_type(text):
 
     lower = text.lower()
 
-    if "12 month" in lower or "12-month" in lower:
-        return "fixed"
-
     if "no fixed term" in lower or "open term" in lower:
         return "open"
+
+    if "12 month" in lower or "12-month" in lower:
+        return "fixed"
 
     return None
 
