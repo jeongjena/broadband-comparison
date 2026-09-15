@@ -9,7 +9,7 @@ Retrieves broadband plan information from the Genesis broadband API,
 extracts internet service plans, and transforms the results into the
 project's standardised format.
 """
-
+import re
 import requests
 from datetime import datetime
 from processing.standardizer import standardize_plans
@@ -125,6 +125,49 @@ def extract_promo_pricing(plan_price, matching_offers):
 
     return None, None, None
 
+def extract_shipping_fee(offer):
+    for description in offer.get("additionalData", {}).get("descriptions", []):
+        for text in description.get("text", []):
+            match = re.search(r"\$(\d+(?:\.\d{1,2})?)\s*shipping", text, re.IGNORECASE)
+            if match:
+                return float(match.group(1))
+    return None
+
+
+def extract_modem_details(matching_offers):
+    for offer in matching_offers:
+        if offer.get("category", {}).get("type") != "DiscountWithProratedClawback":
+            continue
+
+        min_term = offer.get("minimumTerm")
+        discount_amount = offer.get("monthlyAmountIncludingGst")
+        clawback_term = offer.get("clawbackTerm")
+        shipping_fee = extract_shipping_fee(offer)
+
+        condition_parts = []
+        if min_term is not None and discount_amount is not None:
+            condition_parts.append(
+                f"Free on a {min_term}-month term (${discount_amount:.0f} discount covers modem cost)"
+            )
+        if clawback_term is not None:
+            condition_parts.append(
+                f"Early exit fee applies if cancelled within {clawback_term} months"
+            )
+
+        return {
+            "available": True,
+            "price": 0,
+            "shipping_fee": shipping_fee,
+            "condition_text": ". ".join(condition_parts) + "." if condition_parts else None,
+        }
+
+    return {
+        "available": None,
+        "price": None,
+        "shipping_fee": None,
+        "condition_text": None,
+    }
+
 
 def clean_genesis_plans(plans, offers):
     cleaned_plans = []
@@ -181,6 +224,7 @@ def clean_genesis_plans(plans, offers):
         promo_price, promo_period, promo_period_unit = extract_promo_pricing(
             price, matching_offers
         )
+        modem_details = extract_modem_details(matching_offers)
 
         cleaned_plan = {
             "title": plan.get("planDescription"),
@@ -195,6 +239,10 @@ def clean_genesis_plans(plans, offers):
             "promoPeriod": promo_period,
             "promoPeriodUnit": promo_period_unit,
             "contractTermMonths": plan.get("minimumContractTerm"),
+            "shippingFee": modem_details["shipping_fee"],
+            "modemPurchaseAvailable": modem_details["available"],
+            "modemPurchasePrice": modem_details["price"],
+            "modemPurchaseConditionText": modem_details["condition_text"],
             "landlineAllowed": None,  # not provided by API
             "antennaRequired": None,  # not provided by API
         }
@@ -227,6 +275,10 @@ def get_genesis_plans():
                     promo_period=plan.get("promoPeriod"),
                     promo_period_unit=plan.get("promoPeriodUnit"),
                     contract_term_months=plan.get("contractTermMonths"),
+                    shipping_fee=plan.get("shippingFee"),
+                    modem_purchase_available=plan.get("modemPurchaseAvailable"),
+                    modem_purchase_price=plan.get("modemPurchasePrice"),
+                    modem_purchase_condition_text=plan.get("modemPurchaseConditionText"),
                     antenna_required=plan.get("antennaRequired"),
                     data_source="API",
                     source_url="https://www.genesisenergy.co.nz/broadband",
