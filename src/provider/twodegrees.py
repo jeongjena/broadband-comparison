@@ -13,6 +13,7 @@ standardised plan format.
 import requests
 import re
 import time
+from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from processing.standardizer import infer_connection_type
@@ -21,6 +22,7 @@ from processing.standardizer import standardize_plans
 
 
 BASE_URL = "https://api.2degrees.nz/sales/v3/catalog"
+WIRELESS_DETAILS_URL = "https://www.2degrees.nz/broadband/wireless-broadband"
 DEFAULT_CONTRACT_TYPE = "open_or_fixed"
 DEFAULT_FIXED_TERM_MONTHS = 12
 REQUEST_TIMEOUT_SECONDS = 30
@@ -607,6 +609,57 @@ def normalize_speed_mbps(value):
     return None
 
 
+def detail_plan_key(name):
+    return re.sub(r"\s+", " ", clean_text(name)).casefold()
+
+
+def extract_detail_download_speeds(html):
+    """Read the published peak-time speed from each plan's Techy details."""
+    soup = BeautifulSoup(html, "html.parser")
+    speeds = {}
+
+    for modal in soup.select(".modal"):
+        title = modal.select_one(".modal-title")
+        if not title:
+            continue
+
+        plan_name = detail_plan_key(title.get_text(" ", strip=True))
+        for section in modal.select(".accordion-child"):
+            heading = section.select_one(".accordion-title")
+            if not heading or heading.get_text(" ", strip=True).lower() != "techy details":
+                continue
+
+            for item in section.select("li"):
+                match = re.search(
+                    r"\bpeak[ -]time average speeds? around\s+(\d+(?:\.\d+)?)\s*Mbps\b",
+                    item.get_text(" ", strip=True),
+                    re.I,
+                )
+                if match:
+                    speeds[plan_name] = normalize_speed_mbps(match.group(1))
+                    break
+            break
+
+    return speeds
+
+
+def fetch_detail_download_speeds():
+    """Fetch published speeds for wireless plans missing them in the catalog."""
+    try:
+        response = requests.get(
+            WIRELESS_DETAILS_URL,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        detail_speeds = extract_detail_download_speeds(response.text)
+    except (requests.RequestException, ValueError) as error:
+        print(f"2degrees detail speed fallback unavailable: {error}")
+        return {}
+
+    return detail_speeds
+
+
 def build_core_product_lookup(products):
     # Index core products so plan-card core product keys can find detailed fees.
     lookup = {}
@@ -988,10 +1041,11 @@ def get_service_type(service_type, title):
     else:
         return infer_connection_type(title)
 
-def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
+def clean_plans(fixed, wireless, offers, products, hardware_by_core_product, detail_speeds=None):
     # Combine API responses and extract the fields required by the standard schema.
     result = []
     core_product_lookup = build_core_product_lookup(products)
+    detail_speeds = detail_speeds or {}
 
     for item in catalog_items(fixed) + catalog_items(wireless):
         features = item.get("features") or []
@@ -1045,6 +1099,12 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
         power_bundle_saving_amount = extract_power_bundle_saving_amount(promo_text)
         power_bundle_condition_text = extract_power_bundle_condition_text(promo_text)
 
+        down_speed = normalize_speed_mbps(item.get("downSpeed"))
+        used_detail_speed = False
+        if down_speed is None and is_wireless_plan(item):
+            down_speed = detail_speeds.get(detail_plan_key(item.get("title")))
+            used_detail_speed = down_speed is not None
+
         result.append({
             "provider": "2degrees",
             "plan_name": item.get("title"),
@@ -1059,7 +1119,7 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
                 extract_data_allowance_from_feature(feature)
                 or item.get("dataEntitlement")
             ),
-            "speed_down_mbps": normalize_speed_mbps(item.get("downSpeed")),
+            "speed_down_mbps": down_speed,
             "speed_up_mbps": normalize_speed_mbps(item.get("upSpeed")),
             "contract_term_months": contract_term_months,
             "contract_type": contract_type,
@@ -1089,7 +1149,7 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
             "modem_purchase_price": modem_details.get("modem_purchase_price"),
             "modem_purchase_condition_text": modem_details.get("modem_purchase_condition_text"),
             "antenna_required": extract_antenna_required(feature),
-            "data_source": "API",
+            "data_source": "API + HTML" if used_detail_speed else "API",
             "source_url": "https://www.2degrees.nz/broadband/plans?discount=yes",
             "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "raw_offer_text": " | ".join(filter(None, [feature, *matched_promos])),
@@ -1101,7 +1161,14 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product):
 def get_twodegrees_plans():
     # Main entry point used by the aggregator.
     fixed, wireless, offers, products, hardware_by_core_product = fetch_data()
-    plans = clean_plans(fixed, wireless, offers, products, hardware_by_core_product)
+    missing_wireless_speed = any(
+        normalize_speed_mbps(item.get("downSpeed")) is None
+        for item in catalog_items(wireless)
+    )
+    detail_speeds = fetch_detail_download_speeds() if missing_wireless_speed else {}
+    plans = clean_plans(
+        fixed, wireless, offers, products, hardware_by_core_product, detail_speeds
+    )
 
     standardized = []
 
