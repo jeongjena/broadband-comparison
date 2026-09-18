@@ -231,14 +231,20 @@ def extract_promotion_text(promotion_text, feature_text):
 
 
 def extract_mobile_bundle_saving(text):
-    """Extracts mobile bundle saving amount from text like 'save $10'."""
+    """Extract the Skinny Mobile bundle saving without matching BYO savings."""
     if not text:
         return None
 
-    match = re.search(r"save\s*\$?(\d+(?:\.\d{1,2})?)", text.lower())
+    patterns = [
+        r"skinny\s+mobile.{0,100}?save\s*\$?(\d+(?:\.\d{1,2})?)",
+        r"save\s*\$?(\d+(?:\.\d{1,2})?).{0,100}?skinny\s+mobile",
+        r"mobile\s+customers.{0,100}?save\s*\$?(\d+(?:\.\d{1,2})?)",
+    ]
 
-    if match:
-        return float(match.group(1))
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
 
     return None
 
@@ -260,6 +266,40 @@ def extract_byo_modem_saving(text):
         return float(match.group(1))
 
     return None
+
+
+def build_promotion_condition_text(connection_type, promo_period, promo_period_unit):
+    """Describe the eligibility conditions for Skinny's free-period offer."""
+    if promo_period is None or promo_period_unit is None:
+        return None
+
+    if connection_type == "Wireless":
+        offer_name = "60-day free Wireless Broadband promotion"
+    else:
+        offer_name = "one-month free Fixed Broadband promotion"
+
+    return (
+        f"{offer_name} for eligible new Skinny Broadband customers on a "
+        "12-month term. Customer must not currently have Skinny Broadband "
+        "and must not have had Skinny Broadband in the previous 90 days. "
+        "Covers base plan charges only; additional services and other charges "
+        "are excluded."
+    )
+
+
+def build_modem_purchase_condition_text(byo_modem_saving):
+    parts = [
+        "Included free on a 12-month term",
+        "$199 on open term",
+        "$10 shipping fee applies",
+    ]
+
+    if byo_modem_saving is not None:
+        parts.append(
+            f"BYO modem saves ${byo_modem_saving:g} per month for the first 12 months"
+        )
+
+    return ". ".join(parts) + "."
 
 
 def is_maintenance_page(html):
@@ -420,12 +460,17 @@ def clean_skinny_plans(html):
             combined_promo_text
         )
 
-        # "Usually $X" is the standard price; current price is the promo price
+        # "Usually $X" is the standard price. The lower displayed price is the
+        # Skinny Mobile bundle price, not the free-period promotion price.
         current_price = extract_price_number(price_text)
         old_price = extract_price_number(old_price_text)
 
         price = old_price if old_price else current_price
-        promo_price = current_price if old_price else None
+        promo_price = (
+            0.0
+            if promo_period is not None and "free" in combined_promo_text.lower()
+            else None
+        )
 
         promotion_text = extract_promotion_text(raw_promotion_text, feature_text)
         bundle_text = extract_bundle_text(feature_text)
@@ -437,6 +482,12 @@ def clean_skinny_plans(html):
         # BYO modem: fixed-line plans can save $5/month for 12 months
         byo_modem_saving = extract_byo_modem_saving(feature_text)
         byo_modem_allowed = True if byo_modem_saving else None
+
+        promotion_condition_text = build_promotion_condition_text(
+            connection_type,
+            promo_period,
+            promo_period_unit,
+        )
 
         raw_offer_text = " | ".join(
             filter(
@@ -470,7 +521,7 @@ def clean_skinny_plans(html):
 
             "contract_type": infer_contract_type(contract_term_months),
             "contract_term_months": contract_term_months,
-            "contract_condition_text": promotion_text,
+            "contract_condition_text": promotion_condition_text,
 
             # $49 install for fixed-line on open term; free on 12-month term
             "open_term_connection_fee": (
@@ -497,11 +548,13 @@ def clean_skinny_plans(html):
 
             "byo_modem_allowed": byo_modem_allowed,
 
-            # All plans: $199 modem on open term; free on 12-month term
+            # All plans: $199 modem on open term; free on 12-month term.
+            # Fixed-line BYO savings remain a modem condition instead of being
+            # mixed into promo_price.
             "modem_purchase_available": True,
             "modem_purchase_price": 199,
-            "modem_purchase_condition_text": (
-                "Included free on 12-month term. $199 on open term. $10 shipping fee applies."
+            "modem_purchase_condition_text": build_modem_purchase_condition_text(
+                byo_modem_saving
             ),
 
             "modem_rental_available": None,
