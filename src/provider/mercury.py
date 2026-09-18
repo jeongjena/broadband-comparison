@@ -84,7 +84,16 @@ def extract_promotion_text(text):
     text = text.replace(" All ", ". All ")
     text = text.replace(" Rewards ", ". Rewards ")
 
-    parts = re.split(r"\.|\n|\|", text)
+    # Split sentence-like fragments without breaking decimal amounts such as
+    # "$14.95" into "$14" and "95".
+    parts = re.split(r"(?<!\d)\.(?!\d)|\n|\|", text)
+    has_24_month_product_offer = bool(
+        re.search(
+            r"samsung\s+(?:2[-\s]*year|24[-\s]*month)\s+electricity\s+and\s+broadband\s+offer",
+            text,
+            re.IGNORECASE,
+        )
+    )
     cleaned = []
 
     for part in parts:
@@ -98,12 +107,91 @@ def extract_promotion_text(text):
         if "offer summaries" in lower:
             continue
 
+        # This offer is normalised separately so Power BI gets one concise,
+        # stable description instead of the page's duplicated marketing copy.
+        if re.search(
+            r"samsung\s+(?:2[-\s]*year|24[-\s]*month)\s+electricity\s+and\s+broadband\s+offer",
+            lower,
+        ):
+            continue
+
+        # Shipping for the Samsung offer is included in the normalised offer
+        # description below, so do not duplicate it as a separate promotion.
+        if has_24_month_product_offer and (
+            "postage" in lower or "postage and handling" in lower
+        ):
+            continue
+
+        if has_24_month_product_offer and "eero router" in lower:
+            continue
+
         if any(k in lower for k in promotion_keywords):
             cleaned.append(part_clean)
 
     cleaned = list(dict.fromkeys(cleaned))
 
     return " | ".join(cleaned) if cleaned else None
+
+
+def extract_24_month_product_offer(text):
+    """Return a concise description of Mercury's 24-month product offer.
+
+    The offer is intentionally retained as promotion text rather than mapped to
+    ``contract_term_months``.  A Mercury broadband plan can also be available
+    open term or with a 12-month price offer, so assigning 24 months to the plan
+    record itself would incorrectly make the plan look 24-month-only.
+    """
+    if not text:
+        return None
+
+    lower = text.lower()
+    if not re.search(
+        r"samsung\s+(?:2[-\s]*year|24[-\s]*month)\s+electricity\s+and\s+broadband\s+offer",
+        lower,
+    ):
+        return None
+
+    details = [
+        "Samsung 24-month electricity and broadband product offer available",
+    ]
+
+    if "one free eero router" in lower or "get one free eero router" in lower:
+        details.append("Includes one free eero router")
+
+    if re.search(r"(?:add|option to add)\s+up to\s+2\s+more", lower):
+        details.append("Option to add up to two more eero routers")
+
+    shipping_match = re.search(
+        r"\$\s*(\d+(?:\.\d{1,2})?)\s+(?:postage|p\s*&\s*h|postage and handling)",
+        text,
+        re.IGNORECASE,
+    )
+    if shipping_match:
+        details.append(
+            f"${float(shipping_match.group(1)):.2f} postage and handling applies"
+        )
+
+    return ". ".join(details) + "."
+
+
+def merge_text_fragments(*values):
+    """Join non-empty text fragments while preserving their order."""
+    merged = []
+    seen = set()
+
+    for value in values:
+        cleaned_value = clean_text(value)
+        if not cleaned_value:
+            continue
+
+        key = cleaned_value.casefold()
+        if key in seen:
+            continue
+
+        seen.add(key)
+        merged.append(cleaned_value)
+
+    return " | ".join(merged) if merged else None
 
 
 def extract_contract_term_months(text):
@@ -156,7 +244,7 @@ def extract_bundle_text(text):
         "samsung",
     ]
 
-    parts = re.split(r"\.|\n|\|", text)
+    parts = re.split(r"(?<!\d)\.(?!\d)|\n|\|", text)
     matched = []
 
     for part in parts:
@@ -327,7 +415,10 @@ def clean_mercury_plans(html):
         data_allowance = infer_data_allowance(connection_type, feature_text, price)
         plan_name = infer_plan_name(connection_type, speed_down, data_allowance)
 
-        promotion_text = extract_promotion_text(feature_text)
+        promotion_text = merge_text_fragments(
+            extract_promotion_text(feature_text),
+            extract_24_month_product_offer(feature_text),
+        )
         contract_term_months = extract_contract_term_months(feature_text)
         contract_type = infer_contract_type(contract_term_months)
         bundle_text = extract_bundle_text(feature_text)
