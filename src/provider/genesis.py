@@ -25,6 +25,18 @@ headers = {
 
 BROADBAND_COMPONENT_SERVICES = {"Internet", "mobile2_wbb"}
 
+CONTRACT_TERMS = {
+    "Fibre Start": ("open_or_fixed", 12),
+    "Fibre Smart": ("open_or_fixed", 12),
+    "Fibre Super": ("open_or_fixed", 12),
+    "Wireless Smart": ("fixed", 12),
+    "Wireless Super": ("fixed", 12),
+}
+
+# Genesis's API omits a download speed for Wireless Super; 150 Mbps is the
+# advertised fallback for that plan specifically. Upload is left blank.
+WIRELESS_SUPER_FALLBACK_DOWN_SPEED_MBPS = 150
+
 def fetch_genesis_plans():
     # line call
     res = requests.get(URL, headers=headers)
@@ -199,7 +211,14 @@ def clean_genesis_plans(plans, offers):
             continue
         seen.add(key)
 
+        title = plan.get("planDescription")
+
         down_speed = speeds.get("averageSpeedDownMbps")
+        up_speed = speeds.get("averageSpeedUpMbps")
+
+        if title == "Wireless Super" and down_speed is None:
+            down_speed = WIRELESS_SUPER_FALLBACK_DOWN_SPEED_MBPS
+            up_speed = None
 
         if component_service == "mobile2_wbb":
             connection_type = "Wireless"
@@ -224,21 +243,27 @@ def clean_genesis_plans(plans, offers):
         promo_price, promo_period, promo_period_unit = extract_promo_pricing(
             price, matching_offers
         )
+
         modem_details = extract_modem_details(matching_offers)
 
+        contract_type, contract_term_months = CONTRACT_TERMS.get(title, (None, None))
+        if contract_term_months is None:
+            contract_term_months = plan.get("minimumContractTerm")
+
         cleaned_plan = {
-            "title": plan.get("planDescription"),
+            "title": title,
             "serviceType": connection_type,
             "price": price,
             "billingFrequency": billing_frequency,
             "dataEntitlement": data_entitlement,
             "downSpeed": down_speed,
-            "upSpeed": speeds.get("averageSpeedUpMbps"),
+            "upSpeed": up_speed,
             "promotionText": extract_promotion_text(matching_offers),
             "promoPrice": promo_price,
             "promoPeriod": promo_period,
             "promoPeriodUnit": promo_period_unit,
-            "contractTermMonths": plan.get("minimumContractTerm"),
+            "contractType": contract_type,
+            "contractTermMonths": contract_term_months,
             "shippingFee": modem_details["shipping_fee"],
             "modemPurchaseAvailable": modem_details["available"],
             "modemPurchasePrice": modem_details["price"],
@@ -274,6 +299,7 @@ def get_genesis_plans():
                     promo_price=plan.get("promoPrice"),
                     promo_period=plan.get("promoPeriod"),
                     promo_period_unit=plan.get("promoPeriodUnit"),
+                    contract_type=plan.get("contractType"),
                     contract_term_months=plan.get("contractTermMonths"),
                     shipping_fee=plan.get("shippingFee"),
                     modem_purchase_available=plan.get("modemPurchaseAvailable"),
