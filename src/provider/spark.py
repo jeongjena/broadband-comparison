@@ -342,15 +342,21 @@ def extract_speeds(entitlements):
     return None, None
 
 
+def promotion_text(promotion):
+    return clean_text(" | ".join(dict.fromkeys(filter(None, [
+        promotion.get("name"),
+        promotion.get("shortDescription"),
+        promotion.get("longDescription"),
+    ]))))
+
+
 def extract_promo_discount(promotions, base_price):
     for promotion in promotions or []:
-        text = promotion.get("longDescription") or " ".join(filter(None, [
-            promotion.get("name"),
-            promotion.get("shortDescription"),
-        ]))
+        text = promotion_text(promotion)
 
         match = re.search(
-            r"\$(\d+(?:\.\d{1,2})?)\s*off\s*per\s*month\s*for\s*(\d+)\s*months",
+            r"\$(\d+(?:\.\d{1,2})?)\s*(?:off\s*per\s*month|/\s*(?:months?|mths?))"
+            r"\s*for\s*(\d+)\s*months?\b",
             text,
             re.I,
         )
@@ -370,7 +376,7 @@ def extract_promo_discount(promotions, base_price):
     return None, None, None
 
 
-def extract_modem_details(entitlements):
+def extract_modem_details(entitlements, promotions=None):
     details = {}
 
     for entitlement in entitlements or []:
@@ -407,7 +413,11 @@ def extract_modem_details(entitlements):
 
             details["modem_purchase_condition_text"] = clean
 
-        price_match = re.search(r"modem\s+for\s+\$(\d+(?:\.\d{1,2})?)", text, re.I)
+        price_match = re.search(
+            r"modem\s+(?:for\s+|\(\s*usually\s+)\$(\d+(?:\.\d{1,2})?)",
+            text,
+            re.I,
+        )
 
         if price_match:
             details["modem_purchase_available"] = True
@@ -428,29 +438,36 @@ def extract_modem_details(entitlements):
             details["early_termination_fee"] = clean_money(early_fee_match.group(1))
             details["early_termination_fee_condition_text"] = clean
 
+    # Preserve the regular hardware price and retain conditional offers as text.
+    for promotion in promotions or []:
+        text = promotion_text(promotion)
+        if not re.search(r"\bfree\s+modem\b(?!\s+rental\b)", text, re.I):
+            continue
+
+        details["modem_purchase_condition_text"] = " | ".join(dict.fromkeys(filter(None, [
+            details.get("modem_purchase_condition_text"),
+            text,
+        ])))
+        delivery_match = re.search(
+            r"\bdelivery\s+of\s*\$(\d+(?:\.\d{1,2})?)", text, re.I
+        )
+        if delivery_match:
+            details["shipping_fee"] = clean_money(delivery_match.group(1))
+
     return details
 
 
 def extract_promotion_text(promotions, entitlements, promo_offer_text=None):
-    # Keep promotional copy that is not already mapped to structured fields.
+    # Preserve promotional copy alongside structured promotion fields.
     promo_texts = []
 
     if promo_offer_text:
         promo_texts.append(clean_text(promo_offer_text))
 
     for promo in promotions or []:
-        text = clean_text(" | ".join(filter(None, [
-            promo.get("name"),
-            promo.get("shortDescription"),
-            promo.get("longDescription"),
-        ])))
+        text = promotion_text(promo)
 
         if not text:
-            continue
-
-        lower = text.lower()
-
-        if "$" in lower and "off per month" in lower:
             continue
 
         promo_texts.append(text)
@@ -537,7 +554,7 @@ def clean_spark_plans(raw_data):
             if connection_type in {None, "unknown"}:
                 connection_type = infer_connection_type(connection_text)
 
-            modem_details = extract_modem_details(entitlements)
+            modem_details = extract_modem_details(entitlements, promotions)
             contract_type = extract_contract_type(term.get("name"), entitlements)
             
             cleaned_plan = {
