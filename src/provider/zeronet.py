@@ -2,8 +2,8 @@
 Zeronet Broadband Plan Scraper
 
 Contributor: Markus Salvador (23203124)
-Version: 0.9
-Last Updated: 2026-09-27
+Version: 0.10
+Last Updated: 2026-09-28
 
 Retrieves broadband plan information from the Zeronet website using
 Selenium and BeautifulSoup. The scraper captures four page states:
@@ -574,12 +574,8 @@ def clean_zeronet_plans(all_html):
 
                 if old_price and current_price is not None:
                     old_value = extract_price_number(old_price.get_text(strip=True))
-                    # Hyperfibre's crossed-out figure isn't a promo that reverts later -
-                    # its fine print states $135/$165 as the price for the full 12-month
-                    # term, with no "then $X thereafter" clause. So treat the lower value
-                    # as the real price and the higher one as a reference (rrp), not as a
-                    # temporary promo_price/promo_period pair.
-                    if old_value and current_price < old_value and connection_type != "Hyperfibre":
+
+                    if old_value and current_price < old_value:
                         price = old_value
                         promo_price = current_price
                         promo_period_value = extract_promo_period_months(feature)
@@ -592,6 +588,10 @@ def clean_zeronet_plans(all_html):
                             if fallback_period:
                                 promo_period_value = fallback_period
                                 promo_period_unit = fallback_unit
+
+                        if promo_period_value is None and connection_type == "Hyperfibre":
+                            promo_period_value = 12
+                            promo_period_unit = "months"
                     else:
                         price = current_price
                         if old_value and old_value != current_price:
@@ -600,12 +600,6 @@ def clean_zeronet_plans(all_html):
                     price = current_price
                     if old_price is not None:
                         rrp = extract_price_number(old_price.get_text(strip=True))
-
-                if rrp is not None:
-                    # standardize_plans() has no rrp/reference-price field, so
-                    # fold it into raw_offer_text (already passed straight
-                    # through) instead of dropping it on the floor.
-                    raw_offer_parts.append(f"Reference price: ${rrp:g}/month.")
 
                 if intro_text and (
                     "wifi router included" in intro_text.lower()
