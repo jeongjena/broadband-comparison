@@ -150,10 +150,22 @@ def infer_contract_type(text):
 
     lower = text.lower()
 
-    if "no fixed term" in lower or "open term" in lower:
+    if (
+        "no fixed term" in lower
+        or "open term" in lower
+        or "rolling monthly" in lower
+    ):
         return "open"
 
-    if "12 month" in lower or "12-month" in lower:
+    # A promotion lasting 12 months is not necessarily a fixed-term contract.
+    # Only classify a plan as fixed when the text explicitly describes a term
+    # or contract requirement.
+    if re.search(
+        r"(?:12\s*[- ]?month\s+(?:fixed\s+)?term|"
+        r"12\s*[- ]?month\s+contract|"
+        r"(?:fixed\s+)?term\s+of\s+12\s+months?)",
+        lower,
+    ):
         return "fixed"
 
     return None
@@ -165,10 +177,19 @@ def infer_contract_term_months(text):
 
     lower = text.lower()
 
-    if "no fixed term" in lower or "open term" in lower:
+    if (
+        "no fixed term" in lower
+        or "open term" in lower
+        or "rolling monthly" in lower
+    ):
         return 0
 
-    if "12 month" in lower or "12-month" in lower:
+    if re.search(
+        r"(?:12\s*[- ]?month\s+(?:fixed\s+)?term|"
+        r"12\s*[- ]?month\s+contract|"
+        r"(?:fixed\s+)?term\s+of\s+12\s+months?)",
+        lower,
+    ):
         return 12
 
     return None
@@ -214,6 +235,19 @@ def extract_saving_amount(text):
     if not text:
         return None
     match = re.search(r'save \$(\d+\.?\d*)/mth', text, re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
+def extract_welcome_saving(text):
+    """Extract a time-limited broadband welcome discount."""
+    if not text:
+        return None
+
+    match = re.search(
+        r"\$?(\d+(?:\.\d{1,2})?)\s*/?\s*mth\s+welcome\s+discount",
+        text,
+        re.IGNORECASE,
+    )
     return float(match.group(1)) if match else None
 
 
@@ -265,6 +299,8 @@ def clean_sky_plans(data):
 
         raw_promo_price = extract_price(item.get("acquistionOfferPrice"))
         raw_regular_price = extract_price(item.get("price"))
+        then_price = extract_then_price(feature_text)
+        welcome_saving = extract_welcome_saving(feature_text)
         billing_frequency = infer_billing_frequency(item.get("priceFrequencyType"))
 
         regular_price, promo_price = resolve_sky_prices(
@@ -341,6 +377,12 @@ def clean_sky_plans(data):
                 feature_text if category == "broadband_bundle" else None
             ),
             "raw_offer_text": raw_offer_text,
+            # Internal matching evidence. Sky supplies different parts of the
+            # same offer in duplicate cards with the same title/SKU.
+            "_sku": item.get("sku"),
+            "_api_type": item.get("type"),
+            "_then_price": then_price,
+            "_welcome_saving": welcome_saving,
         }
 
         cleaned_plans.append(cleaned_plan)
@@ -349,35 +391,70 @@ def clean_sky_plans(data):
 
 
 def remove_duplicate_sky_plans(plans):
-    unique_plans = {}
-
+    plans_by_name = {}
     for plan in plans:
-        key = plan.get("plan_name")
+        plans_by_name.setdefault(plan.get("plan_name"), []).append(plan)
 
-        if key not in unique_plans:
-            unique_plans[key] = plan
-            continue
+    merged_plans = []
+    for candidates in plans_by_name.values():
+        # Prefer the card containing an explicit post-promotion price because
+        # it also normally carries the fullest offer wording.
+        plan = next(
+            (candidate for candidate in candidates if candidate.get("_then_price") is not None),
+            candidates[0],
+        ).copy()
 
-        existing = unique_plans[key]
-        existing_has_promo = existing.get("promo_price") is not None
-        new_has_promo = plan.get("promo_price") is not None
+        category = plan.get("product_category")
+        then_prices = [
+            candidate.get("_then_price")
+            for candidate in candidates
+            if candidate.get("_then_price") is not None
+        ]
 
-        if new_has_promo and not existing_has_promo:
-            # New entry has promo data; existing doesn't — prefer new
-            unique_plans[key] = plan
-        elif existing_has_promo and not new_has_promo:
-            # Existing has promo; new doesn't — keep existing
-            continue
+        if category == "broadband_bundle":
+            if then_prices:
+                plan["price"] = then_prices[0]
+
+            bundle_promo_prices = [
+                candidate.get("promo_price")
+                for candidate in candidates
+                if candidate.get("promo_price") is not None
+            ]
+            if bundle_promo_prices:
+                plan["promo_price"] = min(bundle_promo_prices)
         else:
-            # Both or neither have promo — keep lower standard price
-            existing_price = existing.get("price")
-            new_price = plan.get("price")
-            if existing_price is None:
-                unique_plans[key] = plan
-            elif new_price is not None and new_price < existing_price:
-                unique_plans[key] = plan
+            welcome_savings = [
+                candidate.get("_welcome_saving")
+                for candidate in candidates
+                if candidate.get("_welcome_saving") is not None
+            ]
 
-    return list(unique_plans.values())
+            # Sky splits the standard "Then" price and welcome saving across
+            # duplicate cards. Combining them avoids treating an API display
+            # price or a Sky-TV customer price as the standard plan price.
+            if then_prices and welcome_savings:
+                plan["price"] = then_prices[0]
+                plan["promo_price"] = round(
+                    plan["price"] - welcome_savings[0],
+                    2,
+                )
+                plan["promo_period"] = 12
+                plan["promotion_text"] = (
+                    f"Save ${welcome_savings[0]:g}/mth for 12 months"
+                )
+
+            # Contract evidence can live on a different duplicate card.
+            if any(candidate.get("contract_type") == "open" for candidate in candidates):
+                plan["contract_type"] = "open"
+                plan["contract_term_months"] = 0
+                plan["contract_condition_text"] = "No fixed term contract"
+
+        for internal_field in ("_sku", "_api_type", "_then_price", "_welcome_saving"):
+            plan.pop(internal_field, None)
+
+        merged_plans.append(plan)
+
+    return merged_plans
 
 
 def get_sky_plans():
