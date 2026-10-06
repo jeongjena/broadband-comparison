@@ -2,8 +2,8 @@
 Zeronet Broadband Plan Scraper
 
 Contributor: Markus Salvador (23203124)
-Version: 0.7
-Last Updated: 2026-07-29
+Version: 0.10
+Last Updated: 2026-09-28
 
 Retrieves broadband plan information from the Zeronet website using
 Selenium and BeautifulSoup. The scraper captures four page states:
@@ -34,15 +34,6 @@ URL = "https://www.zeronet.co.nz/plans/"
 RAW_DIR = Path("data/raw")
 RAW_PATH = RAW_DIR / "zeronet.html"
 
-"""
-def find_hyperfibre_button(driver):
-    return driver.find_element(
-        By.XPATH,
-        "//button[contains(translate(normalize-space(.), "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
-        "'hyperfibre')]"
-    )
-"""
 def find_hyperfibre_button(driver):
     return WebDriverWait(driver, 10).until(
         EC.element_to_be_clickable((
@@ -69,6 +60,25 @@ def click_hyperfibre_button(driver):
     )
 
     time.sleep(2)
+
+def click_weekly_toggle(driver):
+    weekly_button = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, 'label[for="switch-frequency-Weekly"]')
+        )
+    )
+    driver.execute_script("arguments[0].click();", weekly_button)
+    time.sleep(1)
+
+
+def restore_monthly_hyperfibre_view(driver):
+    click_hyperfibre_button(driver)
+
+
+def restore_weekly_hyperfibre_view(driver):
+    click_hyperfibre_button(driver)
+    click_weekly_toggle(driver)
+
 
 def load_plans_page(driver):
     driver.get(URL)
@@ -112,7 +122,9 @@ def fetch_zeronet_plans():
             lambda d: len(d.find_elements(By.CSS_SELECTOR, ".plan-card")) > 3
         )
         html_monthly_hyper = driver.page_source
-        monthly_hyper_details = collect_selected_plan_details(driver)
+        monthly_hyper_details = collect_selected_plan_details(
+            driver, restore_view=restore_monthly_hyperfibre_view
+        )
         all_html.append({
             "billingFrequency": "Monthly",
             "html": html_monthly_hyper,
@@ -125,16 +137,12 @@ def fetch_zeronet_plans():
             lambda d: len(d.find_elements(By.CSS_SELECTOR, ".plan-card")) > 3
         )
 
-        weekly_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, 'label[for="switch-frequency-Weekly"]')
-            )
-        )
-        driver.execute_script("arguments[0].click();", weekly_button)
-        time.sleep(1)
+        click_weekly_toggle(driver)
 
         html_weekly = driver.page_source
-        weekly_details = collect_selected_plan_details(driver)
+        weekly_details = collect_selected_plan_details(
+            driver, restore_view=restore_weekly_hyperfibre_view
+        )
         all_html.append({
             "billingFrequency": "Weekly",
             "html": html_weekly,
@@ -150,7 +158,7 @@ def fetch_zeronet_plans():
         driver.quit()
 
 
-def collect_selected_plan_details(driver):
+def collect_selected_plan_details(driver, restore_view = None):
     """
     Click each visible Select plan button and capture extra checkout copy.
 
@@ -194,6 +202,8 @@ def collect_selected_plan_details(driver):
                     EC.presence_of_element_located((By.CLASS_NAME, "plan-card"))
                 )
                 time.sleep(0.5) # Small buffer 
+                if restore_view:
+                    restore_view(driver)
             else:
                 close_buttons = driver.find_elements(
                     By.CSS_SELECTOR,
@@ -202,6 +212,8 @@ def collect_selected_plan_details(driver):
                 if close_buttons:
                     driver.execute_script("arguments[0].click();", close_buttons[0])
                     time.sleep(0.1)
+                if restore_view:
+                    restore_view(driver)
 
         except Exception:
             continue
@@ -269,6 +281,10 @@ def extract_selected_plan_details(text):
     if relevant_lines:
         details["rawOfferText"] = " ".join(dict.fromkeys(relevant_lines))
 
+    # Kept so the promo period fallback can search the full selected-plan
+    # copy for a line mentioning this plan's specific promo price.
+    details["rawTextLines"] = lines
+
     return details
 
 def extract_price_number(text):
@@ -300,6 +316,30 @@ def extract_promo_period_weeks(text):
     match = re.search(r"(\d+)\s*weeks?", text, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
+def extract_promo_period_from_selected_lines(lines, promo_price):
+    if not lines or promo_price is None:
+        return None, None
+
+    if promo_price == int(promo_price):
+        price_pattern = re.compile(rf"\$\s*{int(promo_price)}(?:\.00)?\b")
+    else:
+        price_pattern = re.compile(rf"\$\s*{promo_price:.2f}\b")
+
+    for index, line in enumerate(lines):
+        if not price_pattern.search(line):
+            continue
+
+        window = " ".join(lines[index:index + 3])
+
+        months = extract_promo_period_months(window)
+        if months:
+            return months, "months"
+
+        weeks = extract_promo_period_weeks(window)
+        if weeks:
+            return weeks, "weeks"
+
+    return None, None
 
 def extract_fee_amount(text):
     if not text:
@@ -500,6 +540,7 @@ def clean_zeronet_plans(all_html):
             byo_modem_allowed = None
             selected_connection_fee = None
             raw_offer_parts = [part for part in (feature, page_note) if part]
+            selected_details = selected_plan_details.get(plan_title, {})
 
             if is_weekly:
                 for item in note_items:
@@ -533,11 +574,24 @@ def clean_zeronet_plans(all_html):
 
                 if old_price and current_price is not None:
                     old_value = extract_price_number(old_price.get_text(strip=True))
+
                     if old_value and current_price < old_value:
                         price = old_value
                         promo_price = current_price
                         promo_period_value = extract_promo_period_months(feature)
                         promo_period_unit = "months" if promo_period_value else None
+
+                        if promo_period_value is None:
+                            fallback_period, fallback_unit = extract_promo_period_from_selected_lines(
+                                selected_details.get("rawTextLines"), promo_price
+                            )
+                            if fallback_period:
+                                promo_period_value = fallback_period
+                                promo_period_unit = fallback_unit
+
+                        if promo_period_value is None and connection_type == "Hyperfibre":
+                            promo_period_value = 12
+                            promo_period_unit = "months"
                     else:
                         price = current_price
                         if old_value and old_value != current_price:
@@ -559,7 +613,6 @@ def clean_zeronet_plans(all_html):
                         "keep your existing router" in intro_text.lower()
                     )
 
-            selected_details = selected_plan_details.get(plan_title, {})
             if selected_details:
                 raw_offer_parts.append(selected_details.get("rawOfferText"))
                 selected_shipping_fee = selected_details.get("shippingFee")
