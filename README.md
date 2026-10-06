@@ -10,12 +10,12 @@ The goal is to automate the collection and comparison of broadband plans from co
 
 ## Objectives
 
-- Automate competitor data collection using an API-first approach, with web scraping as a fallback
+- Automate competitor data collection using APIs and web scraping
 - Clean and map extracted data within provider-specific workflows
 - Convert provider-specific outputs into a standardised broadband schema
-- Use an LLM to classify extracted data into consistent broadband attributes
-- Store structured data for comparison and analysis
-- Support future reporting and visualisation workflows
+- Store historical snapshots in SQLite
+- Identify changes between extraction snapshots
+- Export structured data for Power BI reporting and comparison
 
 ## Competitors
 
@@ -33,52 +33,49 @@ The goal is to automate the collection and comparison of broadband plans from co
 
 ## Tech Stack
 
-- Python (Requests, BeautifulSoup, Selenium, webdriver-manager)
-- LLM-assisted attribute classification (Planned)
-- SQLite (Planned)
-- Power BI (Planned)
+- Python (Requests, BeautifulSoup, Selenium, webdriver-manager, openpyxl)
+- SQLite
+- Power BI
 
 ## Current Status
-
-### Sprint 1 Completed
 
 Implemented:
 
 - Provider-specific API and web scraping workflows
-- Initial standardised broadband attribute model
+- Standardised broadband attribute model
 - Provider-level data cleaning and attribute extraction/mapping
-- Prototype dataset generation
-
-Planned:
-
-- Refine the standardised attribute model
-- Implement LLM-assisted classification for attribute interpretation and standardisation
-- SQLite database integration
-- Automated validation framework
-- CSV export
+- SQLite storage of plans, promotions and historical snapshots
+- Provider-run success and failure tracking
+- Snapshot comparison
+- Excel export for Power BI
 - Power BI reporting
+- Email alerts for reportable changes when configured
+
+LLM-assisted extraction and classification were investigated but were not adopted in the current pipeline. The system uses deterministic extraction and mapping.
 
 ## System Workflow
 
 1. Attempt data extraction via public APIs, if available
-2. Fallback to web scraping when APIs are unavailable
+2. Use web scraping for providers without suitable APIs
 3. Clean and map extracted data inside provider-specific workflows
 4. Convert provider-specific outputs into the shared standard schema
-5. Apply LLM-assisted classification to interpret and classify extracted data (planned)
-6. Aggregate standardised provider outputs into a dataset
-7. Store data in SQLite (planned)
-8. Export data for reporting and analysis (planned)
+5. Aggregate standardised provider outputs into a dataset
+6. Store data in SQLite as a historical snapshot and record provider-run outcomes
+7. Compare the current snapshot with a previous finalised snapshot, when available
+8. Export data to Excel for Power BI reporting and analysis
+9. Send email alerts for reportable changes when configured
 
 ## Project Structure
 
-- `src/provider/` - Provider-specific extraction, scraping, cleaning, and attribute mapping workflows
-- `src/processing/` - Shared text cleaning, connection-type inference, and standard schema helper functions
-- `src/storage/` - Database operations (planned)
-- `src/export/` - CSV export functionality (planned)
-- `src/validation/` - Validation framework (planned)
-- `data/` - Data storage
-- `src/main.py` - Application entry point
-- `src/Export_excel.py` - Exports provider data to an Excel workbook for UAT
+- `src/provider/` - Provider-specific extraction, scraping, cleaning, and attribute mapping
+- `src/processing/` - Shared standardisation helpers and snapshot comparison
+- `src/storage/` - SQLite connection, schema and database write operations
+- `src/export/` - Excel export for Power BI
+- `src/alert/` - Change-alert formatting and email delivery
+- `src/validation/` - Placeholder for an automated validation framework
+- `data/` - Generated database and export files
+- `src/main.py` - Collection, storage, comparison, export and alert entry point
+- `src/Export_excel.py` - Exports live provider data to Excel for manual verification
 
 ## Getting Started
 
@@ -90,6 +87,8 @@ Planned:
 - selenium
 - webdriver-manager
 - openpyxl
+- Google Chrome
+- Internet access
 
 ### Install Dependencies
 
@@ -97,17 +96,30 @@ Planned:
 pip install requests beautifulsoup4 selenium webdriver-manager openpyxl
 ```
 
-### Run Console Output
+### Run the Collection Pipeline
+Run from the repository root. The pipeline stores snapshots in
+`data/database.db` and generates `data/powerbi_export.xlsx`.
+Close the export workbook in Excel before running.
 
 ```bash
 python src/main.py
 ```
 
-### Export UAT Results to Excel
+### Export Provider Data for Manual Verification
 
 ```bash
 python src/Export_excel.py
 ```
+
+This collects live provider data and exports it to Excel for manual comparison with provider sources.
+
+### Export Existing Database Data for Power BI
+
+```bash
+python src/export/powerbi_exporter.py
+```
+
+This regenerates `data/powerbi_export.xlsx` from an existing database without collecting live provider data.
 
 ## Data Flow
 
@@ -115,28 +127,30 @@ python src/Export_excel.py
 Provider Website / API
         |
         v
-Data Extraction
+Provider-specific Data Extraction
         |
         v
 Provider-level Cleaning & Attribute Mapping
         |
         v
-Standardised Attribute Model
-        |
-        v
-LLM-assisted Attribute Classification (Planned)
+Standardised Broadband Model
         |
         v
 Aggregated Standardised Dataset
         |
         v
-SQLite Database (Planned)
+SQLite Historical Snapshots
         |
         v
-CSV Export (Planned)
+Snapshot Comparison 
+        |
+        +----------------------+
+        |                      |
+        v                      v
+Excel Export              Email Alerts
         |
         v
-Power BI Reporting (Planned)
+Power BI Reporting
 ```
 
 ## Disclaimer
