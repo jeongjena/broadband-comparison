@@ -8,6 +8,8 @@ This project is part of the AUT Research and Development (R&D) programme in coll
 
 The goal is to automate the collection and comparison of broadband plans from competitors, providing accurate and up-to-date insights into pricing, promotions, and service offerings.
 
+The system collects and standardises broadband plan data, tracks changes between historical snapshots, and presents the latest plans and identified changes through Power BI for reporting and analysis.
+
 ## Objectives
 
 - Automate competitor data collection using APIs and web scraping
@@ -17,7 +19,7 @@ The goal is to automate the collection and comparison of broadband plans from co
 - Identify changes between extraction snapshots
 - Export structured data for Power BI reporting and comparison
 
-## Competitors
+## Providers Covered
 
 - 2degrees
 - Spark
@@ -55,15 +57,14 @@ LLM-assisted extraction and classification were investigated but were not adopte
 
 ## System Workflow
 
-1. Attempt data extraction via public APIs, if available
-2. Use web scraping for providers without suitable APIs
-3. Clean and map extracted data inside provider-specific workflows
-4. Convert provider-specific outputs into the shared standard schema
-5. Aggregate standardised provider outputs into a dataset
-6. Store data in SQLite as a historical snapshot and record provider-run outcomes
-7. Compare the current snapshot with a previous finalised snapshot, when available
-8. Export data to Excel for Power BI reporting and analysis
-9. Send email alerts for reportable changes when configured
+1. Collect provider data using provider-specific API requests or web scraping
+2. Clean and map extracted data inside provider-specific workflows
+3. Convert provider-specific outputs into the shared standard schema
+4. Aggregate standardised provider outputs into a dataset
+5. Store data in SQLite as a historical snapshot and record provider-run outcomes
+6. Compare the current snapshot with a previous finalised snapshot, when available
+7. Export data to Excel for Power BI reporting and analysis
+8. Send email alerts for reportable changes when configured
 
 ## Project Structure
 
@@ -72,7 +73,6 @@ LLM-assisted extraction and classification were investigated but were not adopte
 - `src/storage/` - SQLite connection, schema and database write operations
 - `src/export/` - Excel export for Power BI
 - `src/alert/` - Change-alert formatting and email delivery
-- `src/validation/` - Placeholder for an automated validation framework
 - `data/` - Generated database and export files
 - `src/main.py` - Collection, storage, comparison, export and alert entry point
 - `src/Export_excel.py` - Exports live provider data to Excel for manual verification
@@ -87,6 +87,7 @@ LLM-assisted extraction and classification were investigated but were not adopte
 - selenium
 - webdriver-manager
 - openpyxl
+- Microsoft Power BI Desktop
 - Google Chrome
 - Internet access
 
@@ -111,7 +112,9 @@ python src/main.py
 python src/Export_excel.py
 ```
 
-This collects live provider data and exports it to Excel for manual comparison with provider sources.
+This collects live provider data and writes `data/uat_export.xlsx` for manual
+comparison with provider sources. It does not update the SQLite snapshots or
+the Power BI export workbook.
 
 ### Export Existing Database Data for Power BI
 
@@ -119,7 +122,23 @@ This collects live provider data and exports it to Excel for manual comparison w
 python src/export/powerbi_exporter.py
 ```
 
-This regenerates `data/powerbi_export.xlsx` from an existing database without collecting live provider data.
+This regenerates `data/powerbi_export.xlsx` from an existing database without
+collecting live provider data. By default, it compares the latest two finalised
+snapshots, or exports the available data without comparison if only one exists.
+
+To compare specific snapshots, provide both snapshot IDs:
+
+```bash
+python src/export/powerbi_exporter.py --old-snapshot 3 --new-snapshot 5
+```
+
+Replace `3` and `5` with existing finalised snapshot IDs. You can find these in
+the `Snapshots` worksheet of an existing export workbook. Both IDs are required
+and must be different.
+
+The selected newer snapshot is used for `CurrentPlans`, and the selected pair
+is used for the change worksheets. Historical worksheets still include all
+stored snapshots.
 
 ### Configure and Refresh Power BI
 
@@ -212,4 +231,4 @@ Power BI Reporting
 
 ## Disclaimer
 
-This project uses publicly available information for academic research purposes only.
+This project uses publicly available information for academic research purposes only. It was developed as a prototype as part of an AUT R&D project and has not been designed for production deployment.
