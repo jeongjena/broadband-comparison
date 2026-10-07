@@ -121,6 +121,63 @@ python src/export/powerbi_exporter.py
 
 This regenerates `data/powerbi_export.xlsx` from an existing database without collecting live provider data.
 
+### Configure and Refresh Power BI
+
+The Power BI report reads its data from `data/powerbi_export.xlsx`. On a new
+machine, update the report so that it points to the local copy of this file:
+
+1. Clone or download this repository and generate `data/powerbi_export.xlsx` by
+   running the collection pipeline or the existing-database export command.
+2. Open the Power BI report in Power BI Desktop.
+3. Select **Home > Transform data > Data source settings**.
+4. Select the existing Excel source, choose **Change Source**, and browse to
+   `<repository>/data/powerbi_export.xlsx`.
+5. Select **Close**, then choose **Home > Refresh**.
+6. Confirm that the report pages and the **Last updated** value display the
+   latest snapshot before saving or publishing the report.
+
+Keep the workbook name and worksheet names unchanged because the Power Query
+queries depend on them. Close the workbook in Excel before regenerating or
+refreshing it. If the workbook is moved to SharePoint or OneDrive, replace the
+local file source in Power Query with the shared file source and verify a full
+refresh before publishing.
+
+### Configure Email Alerts
+
+Email alerts are sent only when the snapshot comparison finds a reportable
+change. Configure the following environment variables before running
+`python src/main.py`:
+
+- `ALERT_EMAIL_ADDRESS` - sender email address
+- `ALERT_EMAIL_PASSWORD` - sender password or app password
+- `ALERT_EMAIL_TO` - comma-separated recipient addresses
+- `ALERT_SMTP_HOST` - optional SMTP host; defaults to `smtp.gmail.com`
+- `ALERT_SMTP_PORT` - optional SSL SMTP port; defaults to `465`
+
+macOS or Linux example:
+
+```bash
+export ALERT_EMAIL_ADDRESS="sender@example.com"
+export ALERT_EMAIL_PASSWORD="app-password"
+export ALERT_EMAIL_TO="recipient@example.com,mentor@example.com"
+python src/main.py
+```
+
+Windows PowerShell example:
+
+```powershell
+$env:ALERT_EMAIL_ADDRESS="sender@example.com"
+$env:ALERT_EMAIL_PASSWORD="app-password"
+$env:ALERT_EMAIL_TO="recipient@example.com,mentor@example.com"
+python src/main.py
+```
+
+Use SMTP credentials appropriate for the sender account. Some providers require
+an app password or administrator approval. Do not commit passwords or other
+credentials to this repository. If the required variables are not configured,
+the collection, comparison and Excel export still run, but the alert is skipped
+and the reason is printed in the terminal.
+
 ## Data Flow
 
 ```text
