@@ -1,484 +1,208 @@
+import json
+import logging
+import math
 import re
-import requests
 from datetime import datetime
 
+import requests
 from processing.standardizer import clean_text, standardize_plans, infer_connection_type
 
-
+logger = logging.getLogger(__name__)
 URL = "https://web-graphql.sky.co.nz/prod/graphql"
-SOURCE_URL = "https://broadband.sky.co.nz/"
+SOURCE_URL = "https://www.sky.co.nz/broadband"
+headers = {"accept": "application/json", "content-type": "application/json",
+           "origin": "https://www.sky.co.nz", "referer": SOURCE_URL,
+           "user-agent": "Mozilla/5.0"}
+PAGE_QUERY = """
+query { NBJComposePages(usePreview: false, slug: "/broadband") {
+  contentList { fields { classNameReference } sys { id } }
+}}
+"""
+CARD_FIELDS = """
+title name price discountedPrice priceFrequencyType productSku description
+shortDescription legalLine infoList discountLozengeText productInfoDescription
+termsAndConditionsCaption
+"""
+PLAN_QUERY = """
+query($id: String!) { NBJComponentDetails(usePreview: false, id: $id) {
+  members { fields { name members {
+    fields { CARD_FIELDS members { fields { CARD_FIELDS } sys { id } } }
+    sys { id }
+  } } }
+}}
+""".replace("CARD_FIELDS", CARD_FIELDS)
 
-headers = {
-    "accept": "*/*",
-    "content-type": "application/json",
-    "origin": "https://broadband.sky.co.nz",
-    "referer": "https://broadband.sky.co.nz/",
-    "user-agent": "Mozilla/5.0",
-}
 
-payload = {
-    "operationName": "GetMoreChoicesForYou",
-    "variables": {
-        "usePreview": False,
-    },
-    "query": """
-    query GetMoreChoicesForYou($usePreview: Boolean) {
-      productsCards(usePreview: $usePreview) {
-        ...ProductCard
-      }
-
-      promoCards(usePreview: $usePreview) {
-        ...PromoCard
-      }
-    }
-
-    fragment ProductCard on ProductCards {
-      title
-      description
-      detailsList
-      price
-      acquistionOfferPrice
-      upgradeOfferPrice
-      priceFrequencyType
-      discountText
-      productSet
-      promoted
-      sku
-      type
-    }
-
-    fragment PromoCard on PromoCard {
-      title
-      subtitle
-      disclaimer
-      fromPrice
-      discountedPrice
-      discountText
-      billingFrequency
-      type
-    }
-    """,
-}
+def rich_text(value):
+    if isinstance(value, str):
+        return clean_text(value) or ""
+    if isinstance(value, list):
+        return " | ".join(filter(None, (rich_text(v) for v in value)))
+    if isinstance(value, dict):
+        if value.get("nodeType") == "text":
+            return value.get("value", "")
+        # Ignore embedded assets and their metadata.
+        return " ".join(filter(None, (rich_text(v) for v in value.get("content", []))))
+    return ""
 
 
 def extract_price(value):
     if value is None:
         return None
     try:
-        return float(str(value).replace("$", "").strip())
-    except (ValueError, TypeError):
-        return None
+        price = float(str(value).replace("$", "").replace(",", "").strip())
+        if price < 0 or not math.isfinite(price):
+            raise ValueError("Invalid price")
+        return price
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid Sky price: {value!r}")
 
 
-def classify_sky_product(title):
-    title = clean_text(title)
-
-    if not title:
-        return "unknown"
-
-    title_lower = title.lower()
-
-    if title_lower in ["sky"]:
-        return "marketing"
-
-    if "best sky experience" in title_lower:
-        return "marketing"
-
-    if "sky box" in title_lower or "sky pod" in title_lower:
-        return "hardware"
-
-    if title_lower.startswith("fibre") and "sky tv" in title_lower:
-        return "broadband_bundle"
-
-    if title_lower.startswith("fibre"):
-        return "broadband_plan"
-
-    if "bundle" in title_lower:
-        return "tv_bundle"
-
-    if title_lower in ["sky movies", "sky entertainment", "sky sport"]:
-        return "tv_addon"
-
-    if title_lower.startswith("sky starter"):
-        return "tv_bundle"
-
-    return "unknown"
-
-
-def is_valid_sky_broadband_product(category):
-    return category in ["broadband_plan", "broadband_bundle"]
-
-
-
-def extract_speed(feature_text):
-    if not feature_text:
-        return None, None
-
-    match = re.search(
-        r"(\d+)\s*Mbps\s*download\s*/\s*(\d+)\s*Mbps\s*upload",
-        feature_text,
-        re.IGNORECASE,
-    )
-
-    if match:
-        return float(match.group(1)), float(match.group(2))
-
-    return None, None
-
-
-def infer_billing_frequency(value):
-    if not value:
-        return "monthly"
-
-    value = str(value).lower()
-
-    if "month" in value:
-        return "Monthly"
-
-    if "week" in value:
-        return "Weekly"
-
-    if "year" in value:
-        return "yearly"
-
-    return "Monthly"
-
-
-def infer_contract_type(text):
-    if not text:
-        return None
-
-    lower = text.lower()
-
-    if (
-        "no fixed term" in lower
-        or "open term" in lower
-        or "rolling monthly" in lower
-    ):
-        return "open"
-
-    # A promotion lasting 12 months is not necessarily a fixed-term contract.
-    # Only classify a plan as fixed when the text explicitly describes a term
-    # or contract requirement.
-    if re.search(
-        r"(?:12\s*[- ]?month\s+(?:fixed\s+)?term|"
-        r"12\s*[- ]?month\s+contract|"
-        r"(?:fixed\s+)?term\s+of\s+12\s+months?)",
-        lower,
-    ):
-        return "fixed"
-
-    return None
-
-
-def infer_contract_term_months(text):
-    if not text:
-        return None
-
-    lower = text.lower()
-
-    if (
-        "no fixed term" in lower
-        or "open term" in lower
-        or "rolling monthly" in lower
-    ):
-        return 0
-
-    if re.search(
-        r"(?:12\s*[- ]?month\s+(?:fixed\s+)?term|"
-        r"12\s*[- ]?month\s+contract|"
-        r"(?:fixed\s+)?term\s+of\s+12\s+months?)",
-        lower,
-    ):
-        return 12
-
-    return None
-
-
-def resolve_sky_prices(regular_price, promo_price, discount_text):
-    """
-    Returns (price, promo_price) where price is the standard rate
-    and promo_price is the discounted rate (always lower than price).
-
-    acquistionOfferPrice occasionally comes back higher than price
-    (e.g. TV customer base rate vs discounted rate). Swap whenever inverted.
-    """
-    if not regular_price and not promo_price:
-        return None, None
-
-    if (
-        promo_price is not None
-        and regular_price is not None
-        and promo_price > regular_price
-    ):
-        return promo_price, regular_price
-
-    return regular_price, promo_price
-
-
-def extract_then_price(text):
-    """
-    Extracts the post-promo standard price from strings like 'Then $215.99/mth'.
-    Used for bundle plans where the API price field is null.
-    """
-    if not text:
-        return None
-    match = re.search(r'Then \$(\d+\.?\d*)/mth', text, re.IGNORECASE)
-    return float(match.group(1)) if match else None
-
-
-def extract_saving_amount(text):
-    """
-    Extracts saving amount from strings like 'Save $10/mth for 12 months' → 10.0
-    Used when API returns the promo price as 'price' without acquistionOfferPrice.
-    """
-    if not text:
-        return None
-    match = re.search(r'save \$(\d+\.?\d*)/mth', text, re.IGNORECASE)
-    return float(match.group(1)) if match else None
-
-
-def extract_welcome_saving(text):
-    """Extract a time-limited broadband welcome discount."""
-    if not text:
-        return None
-
-    match = re.search(
-        r"\$?(\d+(?:\.\d{1,2})?)\s*/?\s*mth\s+welcome\s+discount",
-        text,
-        re.IGNORECASE,
-    )
-    return float(match.group(1)) if match else None
+def extract_speed(text):
+    match = re.search(r"(\d+)\s*Mbps\s*download\s*/\s*(\d+)\s*Mbps\s*upload", text, re.I)
+    return (float(match[1]), float(match[2])) if match else (None, None)
 
 
 def extract_promo_period(text):
-    """
-    Extracts the promo duration in months from strings like 'For 12 months'.
-    """
-    if not text:
-        return None
-    match = re.search(r'For (\d+) months?', text, re.IGNORECASE)
-    return int(match.group(1)) if match else None
+    periods = {int(m[1]) for m in re.finditer(
+        r"(?:for(?: your)?(?: first)?|first)\s+(\d+)\s*[- ]?months?", text, re.I)}
+    if len(periods) > 1:
+        raise ValueError(f"Conflicting Sky promotion periods: {periods}")
+    return next(iter(periods), None)
+
+
+def contract_details(text):
+    terms = {int(m[1]) for m in re.finditer(
+        r"(\d+)\s*[- ]?month\s+(?:fixed\s+)?(?:term|contract)", text, re.I)}
+    terms.update(int(m[1]) for m in re.finditer(
+        r"(?:fixed\s+)?term\s+of\s+(\d+)\s+months?", text, re.I))
+    is_open = bool(re.search(r"no fixed term|open term|rolling monthly", text, re.I))
+    if len(terms) > 1 or (is_open and terms):
+        raise ValueError("Conflicting Sky contract conditions")
+    if is_open:
+        return "open", 0
+    return ("fixed", next(iter(terms))) if terms else (None, None)
+
+
+def query_sky(query, variables=None):
+    response = requests.post(URL, headers=headers,
+        json={"query": query, "variables": variables or {}}, timeout=20)
+    response.raise_for_status()
+    result = response.json()
+    if result.get("errors") or not isinstance(result.get("data"), dict):
+        raise ValueError(f"Invalid Sky GraphQL response: {result}")
+    return result
 
 
 def fetch_sky_plans():
-    response = requests.post(
-        URL,
-        headers=headers,
-        json=payload,
-        timeout=20,
-    )
+    page = query_sky(PAGE_QUERY)
+    components = [c for p in page["data"].get("NBJComposePages", [])
+                  for c in p.get("contentList") or []
+                  if c.get("fields", {}).get("classNameReference") == "bundle-section-ref"]
+    if len(components) != 1:
+        raise ValueError("Expected one Sky broadband plan component")
+    # Resolve the component ID from the live page rather than fixing it in code.
+    return query_sky(PLAN_QUERY, {"id": components[0]["sys"]["id"]})
 
-    response.raise_for_status()
-    return response.json()
+
+def validated_prices(card, text, context):
+    price = extract_price(card.get("price"))
+    promo = extract_price(card.get("discountedPrice"))
+    then_values = {float(m[1].replace(",", "")) for m in re.finditer(
+        r"then\s*\$([\d,]+(?:\.\d+)?)\s*(?:/\s*(?:mth|month)|per\s+month)", text, re.I)}
+    if len(then_values) > 1:
+        raise ValueError(f"Conflicting Then prices: {context}")
+    then = next(iter(then_values), None)
+    if price is not None and then is not None and abs(price - then) > 0.005:
+        logger.warning("Sky price mismatch %s: price=%s, Then=%s; text=%s", context, price, then, text)
+        raise ValueError(f"Sky standard price conflicts with Then price: {context}")
+    if price is None:
+        price = then
+    # Derive only from this card's explicit monthly saving, never another customer group.
+    saving_values = {float(m[1]) for m in re.finditer(
+        r"save\s*\$(\d+(?:\.\d+)?)\s*(?:/\s*(?:mth|month)|per\s+month)",
+        rich_text(card.get("discountLozengeText")), re.I)}
+    if len(saving_values) > 1:
+        raise ValueError(f"Conflicting monthly savings: {context}")
+    saving = next(iter(saving_values), None)
+    if price is None and promo is not None and saving is not None:
+        price = round(promo + saving, 2)
+    if price is not None and promo is not None:
+        if promo > price:
+            raise ValueError(f"Sky discount exceeds standard price: {context}")
+        if saving is not None and abs(price - promo - saving) > 0.005:
+            raise ValueError(f"Sky saving conflicts with prices: {context}")
+        if promo == price:
+            promo = None
+    if price is None:
+        logger.warning("Sky standard price unavailable: %s; card=%s", context, json.dumps(card))
+    return price, promo
 
 
 def clean_sky_plans(data):
-    cleaned_plans = []
-
-    products = data.get("data", {}).get("productsCards", [])
-
-    for item in products:
-        title = clean_text(item.get("title"))
-        category = classify_sky_product(title)
-
-        if not is_valid_sky_broadband_product(category):
-            continue
-
-        description = clean_text(item.get("description"))
-        discount_text = clean_text(item.get("discountText"))
-
-        details_list = item.get("detailsList") or []
-        details_text = " | ".join(
-            filter(None, [clean_text(detail) for detail in details_list])
-        )
-
-        feature_text = " | ".join(
-            filter(None, [description, discount_text, details_text])
-        )
-
-        raw_promo_price = extract_price(item.get("acquistionOfferPrice"))
-        raw_regular_price = extract_price(item.get("price"))
-        then_price = extract_then_price(feature_text)
-        welcome_saving = extract_welcome_saving(feature_text)
-        billing_frequency = infer_billing_frequency(item.get("priceFrequencyType"))
-
-        regular_price, promo_price = resolve_sky_prices(
-            raw_regular_price, raw_promo_price, discount_text
-        )
-
-        # Fall back to "Then $X/mth" in text if price is not in the API response
-        if regular_price is None:
-            regular_price = extract_then_price(feature_text)
-
-        # If API returned only one price but discountText says "Save $X/mth",
-        # the API price is the promo rate — derive standard price from the saving.
-        if promo_price is None and regular_price is not None:
-            saving = extract_saving_amount(discount_text)
-            if saving:
-                promo_price = regular_price
-                regular_price = round(regular_price + saving, 2)
-
-        # Only set promo_period when there is an actual promo price
-        promo_period = extract_promo_period(feature_text) if promo_price else None
-        # Fallback: Sky promos are always 12 months
-        if promo_price and promo_period is None:
-            promo_period = 12
-
-        # Build promotion_text from discountText, or construct if API didn't provide it
-        if promo_price:
-            if discount_text:
-                promotion_text = discount_text
-            else:
-                saving_amount = round(regular_price - promo_price, 2)
-                promotion_text = f"Save ${saving_amount:.2f}/mth for {promo_period} months"
-        else:
-            promotion_text = None
-
-        raw_offer_text = " | ".join(
-            filter(
-                None,
-                [
-                    title,
-                    description,
-                    discount_text,
-                    details_text,
-                    f"price: {item.get('price')}" if item.get("price") else None,
-                    (
-                        f"acquistionOfferPrice: {item.get('acquistionOfferPrice')}"
-                        if item.get("acquistionOfferPrice")
-                        else None
-                    ),
-                    (
-                        f"upgradeOfferPrice: {item.get('upgradeOfferPrice')}"
-                        if item.get("upgradeOfferPrice")
-                        else None
-                    ),
-                ],
-            )
-        )
-
-        cleaned_plan = {
-            "plan_name": title,
-            "product_category": category,
-            "connection_type": infer_connection_type(f"{title} {feature_text}"),
-            "price": regular_price,
-            "promo_price": promo_price,
-            "promo_period": promo_period,
-            "billing_frequency": billing_frequency,
-            "promotion_text": promotion_text,
-            "data_allowance": "Unlimited",
-            "speed_down_mbps": extract_speed(feature_text)[0],
-            "speed_up_mbps": extract_speed(feature_text)[1],
-            "contract_type": infer_contract_type(feature_text),
-            "contract_term_months": infer_contract_term_months(feature_text),
-            "contract_condition_text": feature_text,
-            "bundle_condition_text": (
-                feature_text if category == "broadband_bundle" else None
-            ),
-            "raw_offer_text": raw_offer_text,
-            # Internal matching evidence. Sky supplies different parts of the
-            # same offer in duplicate cards with the same title/SKU.
-            "_sku": item.get("sku"),
-            "_api_type": item.get("type"),
-            "_then_price": then_price,
-            "_welcome_saving": welcome_saving,
-        }
-
-        cleaned_plans.append(cleaned_plan)
-
-    return remove_duplicate_sky_plans(cleaned_plans)
-
-
-def remove_duplicate_sky_plans(plans):
-    plans_by_name = {}
-    for plan in plans:
-        plans_by_name.setdefault(plan.get("plan_name"), []).append(plan)
-
-    merged_plans = []
-    for candidates in plans_by_name.values():
-        # Prefer the card containing an explicit post-promotion price because
-        # it also normally carries the fullest offer wording.
-        plan = next(
-            (candidate for candidate in candidates if candidate.get("_then_price") is not None),
-            candidates[0],
-        ).copy()
-
-        category = plan.get("product_category")
-        then_prices = [
-            candidate.get("_then_price")
-            for candidate in candidates
-            if candidate.get("_then_price") is not None
-        ]
-
-        if category == "broadband_bundle":
-            if then_prices:
-                plan["price"] = then_prices[0]
-
-            bundle_promo_prices = [
-                candidate.get("promo_price")
-                for candidate in candidates
-                if candidate.get("promo_price") is not None
-            ]
-            if bundle_promo_prices:
-                plan["promo_price"] = min(bundle_promo_prices)
-        else:
-            # For standalone broadband cards, "Then $X/mth" is the ongoing
-            # monthly price after the introductory offer.  Sky can also expose
-            # another display price in the API (for example the non-customer
-            # list price), so keeping the raw API price here makes the exported
-            # price disagree with the offer wording.
-            if then_prices:
-                plan["price"] = then_prices[0]
-
-            welcome_savings = [
-                candidate.get("_welcome_saving")
-                for candidate in candidates
-                if candidate.get("_welcome_saving") is not None
-            ]
-
-            explicit_promo_prices = [
-                candidate.get("promo_price")
-                for candidate in candidates
-                if candidate.get("promo_price") is not None
-                and plan.get("price") is not None
-                and candidate.get("promo_price") < plan.get("price")
-            ]
-
-            # Sky splits the standard "Then" price and welcome saving across
-            # duplicate cards. Combining them avoids treating an API display
-            # price or a Sky-TV customer price as the standard plan price.
-            if explicit_promo_prices:
-                plan["promo_price"] = min(explicit_promo_prices)
-                plan["promo_period"] = plan.get("promo_period") or 12
-            elif then_prices and welcome_savings:
-                plan["promo_price"] = round(
-                    plan["price"] - welcome_savings[0],
-                    2,
-                )
-                plan["promo_period"] = 12
-                plan["promotion_text"] = (
-                    f"Save ${welcome_savings[0]:g}/mth for 12 months"
-                )
-            elif then_prices:
-                # An acquisition price equal to the ongoing price is not a
-                # discount and must not be exported as a promotion.
-                plan["promo_price"] = None
-                plan["promo_period"] = None
-                plan["promotion_text"] = None
-
-            # Contract evidence can live on a different duplicate card.
-            if any(candidate.get("contract_type") == "open" for candidate in candidates):
-                plan["contract_type"] = "open"
-                plan["contract_term_months"] = 0
-                plan["contract_condition_text"] = "No fixed term contract"
-
-        for internal_field in ("_sku", "_api_type", "_then_price", "_welcome_saving"):
-            plan.pop(internal_field, None)
-
-        merged_plans.append(plan)
-
-    return merged_plans
+    """Collect new-customer broadband and separate TV + Broadband offers."""
+    plans, seen, found_audience = [], {}, False
+    for component in data.get("data", {}).get("NBJComponentDetails") or []:
+        for group in component.get("members") or []:
+            fields = group.get("fields", {})
+            group_name = fields.get("name")
+            for member in fields.get("members") or []:
+                section = member.get("fields", {})
+                if group_name == "Broadband":
+                    if section.get("name") != "I am new here":
+                        continue
+                    found_audience = True
+                    audience = section["name"]
+                    cards = section.get("members") or []
+                elif group_name == "TV + Broadband":
+                    audience = group_name
+                    cards = [member]
+                else:
+                    continue
+                for entry in cards:
+                    card = entry.get("fields", {})
+                    title = " ".join((clean_text(card.get("title")) or "").split())
+                    if not title.lower().startswith("fibre"):
+                        continue
+                    context = f"{audience}: {title}"
+                    text = " | ".join(filter(None, (rich_text(card.get(k)) for k in
+                        ("description", "shortDescription", "infoList", "legalLine",
+                         "discountLozengeText", "productInfoDescription", "termsAndConditionsCaption"))))
+                    contract_type, contract_term = contract_details(rich_text(card.get("legalLine")) + " | " + rich_text(card.get("infoList")))
+                    price, promo = validated_prices(card, text, context)
+                    period = extract_promo_period(text) if promo is not None else None
+                    if promo is not None and period is None:
+                        logger.warning("Sky promotion duration unavailable: %s", context)
+                    down, up = extract_speed(text)
+                    bundle = group_name == "TV + Broadband"
+                    sku = tuple(sorted(card.get("productSku") or []))
+                    identity = entry.get("sys", {}).get("id") or sku
+                    if not identity:
+                        raise ValueError(f"Sky product identity unavailable: {context}")
+                    key = (identity, audience, contract_type, contract_term)
+                    # Remove exact duplicate cards only. Never select the cheapest conflicting card.
+                    fingerprint = json.dumps(card, sort_keys=True)
+                    if key in seen:
+                        if seen[key] != fingerprint:
+                            raise ValueError(f"Conflicting duplicate Sky cards: {context}")
+                        continue
+                    seen[key] = fingerprint
+                    plans.append({
+                        "plan_name": title, "customer_group": audience,
+                        "product_category": "broadband_bundle" if bundle else "broadband_plan",
+                        "connection_type": infer_connection_type(title),
+                        "price": price, "promo_price": promo, "promo_period": period,
+                        "billing_frequency": card.get("priceFrequencyType") or "Monthly",
+                        "promotion_text": rich_text(card.get("discountLozengeText")) or text if promo is not None else None,
+                        "data_allowance": "Unlimited", "speed_down_mbps": down, "speed_up_mbps": up,
+                        "contract_type": contract_type, "contract_term_months": contract_term,
+                        "contract_condition_text": text,
+                        "bundle_condition_text": f"Customer group: {audience} | {text}" if bundle else None,
+                        "raw_offer_text": f"{context} | product ID: {identity} | SKU: {sku} | price: {card.get('price')} | discountedPrice: {card.get('discountedPrice')} | {text}",
+                    })
+    if not found_audience or not plans:
+        raise ValueError("Sky API returned no new-customer broadband plans")
+    return plans
 
 
 def get_sky_plans():
