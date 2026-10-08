@@ -423,17 +423,35 @@ def remove_duplicate_sky_plans(plans):
             if bundle_promo_prices:
                 plan["promo_price"] = min(bundle_promo_prices)
         else:
+            # For standalone broadband cards, "Then $X/mth" is the ongoing
+            # monthly price after the introductory offer.  Sky can also expose
+            # another display price in the API (for example the non-customer
+            # list price), so keeping the raw API price here makes the exported
+            # price disagree with the offer wording.
+            if then_prices:
+                plan["price"] = then_prices[0]
+
             welcome_savings = [
                 candidate.get("_welcome_saving")
                 for candidate in candidates
                 if candidate.get("_welcome_saving") is not None
             ]
 
+            explicit_promo_prices = [
+                candidate.get("promo_price")
+                for candidate in candidates
+                if candidate.get("promo_price") is not None
+                and plan.get("price") is not None
+                and candidate.get("promo_price") < plan.get("price")
+            ]
+
             # Sky splits the standard "Then" price and welcome saving across
             # duplicate cards. Combining them avoids treating an API display
             # price or a Sky-TV customer price as the standard plan price.
-            if then_prices and welcome_savings:
-                plan["price"] = then_prices[0]
+            if explicit_promo_prices:
+                plan["promo_price"] = min(explicit_promo_prices)
+                plan["promo_period"] = plan.get("promo_period") or 12
+            elif then_prices and welcome_savings:
                 plan["promo_price"] = round(
                     plan["price"] - welcome_savings[0],
                     2,
@@ -442,6 +460,12 @@ def remove_duplicate_sky_plans(plans):
                 plan["promotion_text"] = (
                     f"Save ${welcome_savings[0]:g}/mth for 12 months"
                 )
+            elif then_prices:
+                # An acquisition price equal to the ongoing price is not a
+                # discount and must not be exported as a promotion.
+                plan["promo_price"] = None
+                plan["promo_period"] = None
+                plan["promotion_text"] = None
 
             # Contract evidence can live on a different duplicate card.
             if any(candidate.get("contract_type") == "open" for candidate in candidates):
