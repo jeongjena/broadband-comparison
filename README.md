@@ -137,8 +137,21 @@ the `Snapshots` worksheet of an existing export workbook. Both IDs are required
 and must be different.
 
 The selected newer snapshot is used for `CurrentPlans`, and the selected pair
-is used for the change worksheets. Historical worksheets still include all
-stored snapshots.
+is used for the change worksheets. Excel retains up to the latest 30 snapshots
+by default, removing older history from the workbook on each export. The
+`Snapshots`, `ProviderRuns`, `Plans`, and `Promotions` sheets use the same retained
+snapshot IDs. SQLite keeps its full history. Explicitly selected comparison
+snapshots are included within the limit, replacing the oldest other snapshots
+if needed.
+
+To change the Excel history limit (minimum 2):
+
+```bash
+python src/export/powerbi_exporter.py --max-snapshots 50
+```
+
+The collection pipeline uses `DEFAULT_MAX_SNAPSHOTS` in
+`src/export/powerbi_exporter.py` (30 by default).
 
 ### Configure and Refresh Power BI
 

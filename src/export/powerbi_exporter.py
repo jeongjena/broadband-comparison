@@ -28,6 +28,7 @@ from storage.connection import get_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "powerbi_export.xlsx"
+DEFAULT_MAX_SNAPSHOTS = 30
 
 HEADER_FILL = PatternFill("solid", start_color="2F5496")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
@@ -75,13 +76,33 @@ def _write_sheet(workbook, title, rows, headers):
     return worksheet
 
 
-def _load_snapshots(conn):
-    """Load all stored collection snapshots."""
+def _load_snapshots(conn, max_snapshots, required_ids=()):
+    """Keep recent snapshots and the comparison pair within the export limit."""
 
-    return _fetch_dicts(
+    snapshots = _fetch_dicts(
         conn,
-        "SELECT id, timestamp, status FROM snapshot ORDER BY id",
+        "SELECT id, timestamp, status FROM snapshot ORDER BY id DESC LIMIT ?",
+        (max_snapshots,),
     )
+    retained = {row["id"]: row for row in snapshots}
+    required_ids = {snapshot_id for snapshot_id in required_ids if snapshot_id is not None}
+    for snapshot_id in required_ids:
+        if snapshot_id not in retained:
+            retained[snapshot_id] = _fetch_dicts(
+                conn, "SELECT id, timestamp, status FROM snapshot WHERE id = ?",
+                (snapshot_id,),
+            )[0]
+    for snapshot_id in sorted(retained):
+        if len(retained) <= max_snapshots:
+            break
+        if snapshot_id not in required_ids:
+            del retained[snapshot_id]
+    return [retained[snapshot_id] for snapshot_id in sorted(retained)]
+
+
+def _snapshot_filter(column, snapshot_ids):
+    placeholders = ", ".join("?" for _ in snapshot_ids)
+    return f"{column} IN ({placeholders})" if snapshot_ids else "0"
 
 
 def _load_providers(conn):
@@ -90,12 +111,12 @@ def _load_providers(conn):
     return _fetch_dicts(conn, "SELECT id, name FROM provider ORDER BY id")
 
 
-def _load_provider_runs(conn):
+def _load_provider_runs(conn, snapshot_ids):
     """Load provider collection results with display names."""
 
     return _fetch_dicts(
         conn,
-        """
+        f"""
         SELECT
             provider_run.id,
             provider_run.snapshot_id,
@@ -106,12 +127,14 @@ def _load_provider_runs(conn):
             provider_run.error_message
         FROM provider_run
         JOIN provider ON provider.id = provider_run.provider_id
+        WHERE {_snapshot_filter('provider_run.snapshot_id', snapshot_ids)}
         ORDER BY provider_run.snapshot_id, provider.name
         """,
+        snapshot_ids,
     )
 
 
-def _load_plans(conn):
+def _load_plans(conn, snapshot_ids):
     """Load all historical plan observations."""
 
     plan_columns = _table_columns(conn, "plan")
@@ -128,17 +151,19 @@ def _load_plans(conn):
         SELECT {', '.join(selected)}
         FROM plan
         JOIN provider ON provider.id = plan.provider_id
+        WHERE {_snapshot_filter('plan.snapshot_id', snapshot_ids)}
         ORDER BY plan.snapshot_id, provider.name, plan.id
         """,
+        snapshot_ids,
     )
 
 
-def _load_promotions(conn):
+def _load_promotions(conn, snapshot_ids):
     """Load structured promotions with their plan relationships."""
 
     return _fetch_dicts(
         conn,
-        """
+        f"""
         SELECT
             promotion.id,
             promotion.plan_id,
@@ -152,8 +177,10 @@ def _load_promotions(conn):
         FROM promotion
         JOIN plan ON plan.id = promotion.plan_id
         JOIN provider ON provider.id = plan.provider_id
+        WHERE {_snapshot_filter('plan.snapshot_id', snapshot_ids)}
         ORDER BY plan.snapshot_id, provider.name, promotion.id
         """,
+        snapshot_ids,
     )
 
 
@@ -327,6 +354,7 @@ def export_powerbi(
     old_snapshot_id=None,
     new_snapshot_id=None,
     changes=None,
+    max_snapshots=DEFAULT_MAX_SNAPSHOTS,
 ):
     """Rebuild the workbook from the current database contents.
 
@@ -334,19 +362,25 @@ def export_powerbi(
     the previous successful workbook.
     """
 
+    if isinstance(max_snapshots, bool) or not isinstance(max_snapshots, int) or max_snapshots < 2:
+        raise ValueError("max_snapshots must be an integer of at least 2")
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    snapshots = _load_snapshots(conn)
-    providers = _load_providers(conn)
-    provider_runs = _load_provider_runs(conn)
-    plans = _load_plans(conn)
-    promotions = _load_promotions(conn)
     old_snapshot_id, current_snapshot_id = _select_snapshot_ids(
         conn,
         old_snapshot_id=old_snapshot_id,
         new_snapshot_id=new_snapshot_id,
     )
+    snapshots = _load_snapshots(
+        conn, max_snapshots, (old_snapshot_id, current_snapshot_id),
+    )
+    snapshot_ids = [row["id"] for row in snapshots]
+    providers = _load_providers(conn)
+    provider_runs = _load_provider_runs(conn, snapshot_ids)
+    plans = _load_plans(conn, snapshot_ids)
+    promotions = _load_promotions(conn, snapshot_ids)
     current_plans = _load_current_plans(conn, current_snapshot_id)
     if changes is None:
         changes = (
@@ -475,6 +509,8 @@ def _parse_args():
     )
     parser.add_argument("--old-snapshot", type=int)
     parser.add_argument("--new-snapshot", type=int)
+    parser.add_argument("--max-snapshots", type=int, default=DEFAULT_MAX_SNAPSHOTS,
+                        help="Maximum snapshots in Excel (default: 30, minimum: 2). SQLite history is retained.")
     return parser.parse_args()
 
 
@@ -489,6 +525,7 @@ def main():
                 conn,
                 old_snapshot_id=args.old_snapshot,
                 new_snapshot_id=args.new_snapshot,
+                max_snapshots=args.max_snapshots,
             )
         except (RuntimeError, ValueError) as exc:
             raise SystemExit(f"[EXPORT ERROR] {exc}") from exc
