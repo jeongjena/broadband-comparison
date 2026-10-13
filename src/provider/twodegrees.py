@@ -249,6 +249,14 @@ def extract_offer_text(offer):
             if not text:
                 continue
 
+            if description_type == "stackerDescription":
+                titles = [
+                    part
+                    for entry in descriptions
+                    if entry.get("type") == "stackerTitle"
+                    for part in entry.get("text", [])
+                ]
+                text = titles + text
             return append_offer_conditions(clean_text(" ".join(text)), offer)
 
     return extract_offer_summary_text(offer)
@@ -284,7 +292,7 @@ def append_offer_conditions(text, offer):
     if duration_type == "OneOff" and not re.search(r"\bone[- ]off\b", lower):
         parts.append("one-off credit")
     elif duration_type != "OneOff" and duration_months and not re.search(
-        rf"\bfor\s+{re.escape(str(duration_months))}\s+months?\b",
+        rf"\bfor\s+(?:(?:your\s+)?first\s+)?{re.escape(str(duration_months))}\s+months?\b",
         lower,
     ):
         parts.append(f"for {duration_months} months")
@@ -299,7 +307,7 @@ def extract_base_promo(feature):
 
     parts = [clean_text(p) for p in feature.split("|")]
 
-    keywords = ["off", "free", "discount", "prime video", "sale"]
+    keywords = ["off", "free", "discount", "prime video", "sale", "half price"]
 
     promos = []
 
@@ -309,7 +317,7 @@ def extract_base_promo(feature):
 
         lower = part.lower()
 
-        if is_structured_promo_fragment(part):
+        if is_structured_promo_fragment(part) and "half price" not in lower:
             continue
 
         if any(keyword in lower for keyword in keywords):
@@ -1041,6 +1049,21 @@ def get_service_type(service_type, title):
     else:
         return infer_connection_type(title)
 
+def extract_promo_pricing(item):
+    # Plan cards expose the advertised recurring price and its duration directly.
+    # Do not use bundle savings or total savings as the promotional monthly price.
+    price = item.get("strikethroughDiscountPrice")
+    period = item.get("discountPeriod")
+    if price is None or period is None:
+        return None, None, None
+    try:
+        months = int(str(period))
+    except (TypeError, ValueError):
+        return None, None, None
+    if months <= 0:
+        return None, None, None
+    return clean_money(price), months, "months"
+
 def clean_plans(fixed, wireless, offers, products, hardware_by_core_product, detail_speeds=None):
     # Combine API responses and extract the fields required by the standard schema.
     result = []
@@ -1058,6 +1081,7 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product, det
         ]))
 
         base_promo = extract_base_promo(feature)
+        promo_price, promo_period, promo_period_unit = extract_promo_pricing(item)
         matched_promos = []
 
         for offer in offers:
@@ -1113,6 +1137,9 @@ def clean_plans(fixed, wireless, offers, products, hardware_by_core_product, det
                 item.get("title"),
             ),
             "price": item.get("rrp"),
+            "promo_price": promo_price,
+            "promo_period": promo_period,
+            "promo_period_unit": promo_period_unit,
             "billing_frequency": "Monthly",
             "promotion_text": promo_text,
             "data_allowance": normalize_data_allowance(
@@ -1178,6 +1205,9 @@ def get_twodegrees_plans():
             plan_name=p["plan_name"],
             connection_type=p["connection_type"],
             price=p["price"],
+            promo_price=p["promo_price"],
+            promo_period=p["promo_period"],
+            promo_period_unit=p["promo_period_unit"],
             billing_frequency=p["billing_frequency"],
             data_allowance=p["data_allowance"],
             speed_down_mbps=p["speed_down_mbps"],
