@@ -303,6 +303,20 @@ def extract_bundle_saving_amount(text):
     return None
 
 
+def extract_shipping_fee(text):
+    """Extracts shipping/postage fee from text, e.g. '$14.95 postage' → 14.95."""
+    if not text:
+        return None
+
+    match = re.search(
+        r"\$\s*(\d+(?:\.\d{1,2})?)\s+(?:postage|p\s*&\s*h|postage and handling)",
+        text,
+        re.IGNORECASE,
+    )
+
+    return float(match.group(1)) if match else None
+
+
 def infer_connection_type_from_text(feature_text):
     """
     Mercury-specific connection type inference.
@@ -423,16 +437,29 @@ def clean_mercury_plans(html):
         contract_type = infer_contract_type(contract_term_months)
         bundle_text = extract_bundle_text(feature_text)
 
-        # Mercury is an energy company — power and gas bundles are always available.
-        # Half-price for first 12 months when bundled with electricity (Fibre Lite excluded).
-        power_bundle_saving_amount = None if plan_name == "Fibre Lite" else round(price * 0.5, 2)
+        # Dynamically extract power bundle saving percentage from bundle text.
+        # Fibre Lite is not eligible for the half-price bundle offer.
+        is_fibre_lite = plan_name == "Fibre Lite"
+        power_bundle_pct = (
+            extract_bundle_saving_pct(bundle_text)
+            if not is_fibre_lite
+            else None
+        )
+        power_bundle_amount = (
+            round(price * power_bundle_pct / 100, 2)
+            if power_bundle_pct and price
+            else None
+        )
 
-        # Wireless: free router rental + $14.95 P&H
-        # Fibre: eero routers available for purchase + $14.95 P&H
+        # Dynamically extract shipping fee; fall back to known default.
+        shipping_fee = extract_shipping_fee(feature_text) or 14.95
+
+        # Wireless: free router rental + shipping fee
+        # Fibre: eero routers available for purchase + shipping fee
         modem_rental_available = True if connection_type == "Wireless" else None
         modem_rental_price = 0.0 if connection_type == "Wireless" else None
         modem_rental_condition_text = (
-            "Free router rental. $14.95 postage and handling fee applies. "
+            f"Free router rental. ${shipping_fee:.2f} postage and handling fee applies. "
             "Router must be returned within 14 days of cancellation."
             if connection_type == "Wireless"
             else None
@@ -440,7 +467,7 @@ def clean_mercury_plans(html):
 
         modem_purchase_available = True if connection_type == "Fibre" else None
         modem_purchase_condition_text = (
-            "eero 6+ routers available. $14.95 postage and handling fee applies."
+            f"eero 6+ routers available. ${shipping_fee:.2f} postage and handling fee applies."
             if connection_type == "Fibre"
             else None
         )
@@ -465,16 +492,17 @@ def clean_mercury_plans(html):
                 "contract_term_months": contract_term_months,
                 "contract_condition_text": feature_text,
                 "power_bundle_available": True,
-                "power_bundle_saving_amount": power_bundle_saving_amount,
-                # Fibre Lite is not eligible for the 12-months half-price bundle offer.
-                # All other plans (FibreClassic, FibreMax, Wireless) get 50% off for 12 months.
-                "power_bundle_saving_pct": None if plan_name == "Fibre Lite" else 50,
-                "gas_bundle_available": True,
+                "power_bundle_saving_amount": power_bundle_amount,
+                "power_bundle_saving_pct": power_bundle_pct,
+                # Mercury is an electricity company — gas bundling is not offered.
+                "gas_bundle_available": False,
                 "gas_bundle_saving_amount": None,
+                # Mobile bundle: 50% off mobile for 12 months (additional benefit only,
+                # does not reduce broadband price — handled in Power BI as additional benefit).
                 "mobile_bundle_available": True,
                 "mobile_bundle_saving_amount": None,
                 "bundle_condition_text": (
-                    None if plan_name == "Fibre Lite" else
+                    None if is_fibre_lite else
                     "Broadband + Mobile: 50% off the mobile plan for 12 months. "
                     "Power + Broadband + Mobile: 50% off both broadband and mobile plans for 12 months."
                 ),
@@ -487,7 +515,7 @@ def clean_mercury_plans(html):
                 "modem_purchase_price": None,
                 "modem_purchase_condition_text": modem_purchase_condition_text,
                 "antenna_required": False if connection_type == "Fibre" else None,
-                "shipping_fee": 14.95,
+                "shipping_fee": shipping_fee,
                 "data_source": "STATIC_HTML",
                 "source_url": URL,
                 "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
