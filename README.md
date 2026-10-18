@@ -76,6 +76,8 @@ LLM-assisted extraction and classification were investigated but were not adopte
 - `data/` - Generated database and export files
 - `src/main.py` - Collection, storage, comparison, export and alert entry point
 - `src/Export_excel.py` - Exports live provider data to Excel for manual verification
+- `src/validate_snapshot.py` - Read-only validation of stored snapshot data
+- `tests/` - Offline unit tests for shared validation rules
 
 ## Getting Started
 
@@ -115,6 +117,57 @@ python src/Export_excel.py
 This collects live provider data and writes `data/uat_export.xlsx` for manual
 comparison with provider sources. It does not update the SQLite snapshots or
 the Power BI export workbook.
+
+### Run Validation Unit Tests
+
+Run from the repository root:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use sample records to check the validation rules in
+`src/processing/validation.py`. They cover required provider and plan names,
+allowed connection types, non-negative monetary values, positive speeds,
+percentage boundaries (0–100), integer contract and promotion periods,
+promotion units (`months`, `weeks`, `days`), and boolean fields. Optional
+values may be `None`; provider and plan names are required.
+
+These tests do not collect live data, write to the database, or send email.
+Passing tests show that the validator behaves as expected for the tested
+cases; they do not establish that actual collected data is valid.
+
+### Validate Stored Collection Results
+
+After running `python src/main.py`, check the latest finalised snapshot:
+
+```bash
+python src/validate_snapshot.py
+```
+
+To check a specific snapshot:
+
+```bash
+python src/validate_snapshot.py --snapshot 83
+```
+
+Replace `83` with an existing finalised snapshot ID. Running snapshots cannot
+be selected. The command opens `data/database.db` in read-only mode and checks
+stored plans and their promotions without collecting new data or changing the
+database. It prints the selected snapshot, collection status, field-level
+validation errors, and counts of passed and failed plans. Failed provider
+runs are also reported; an incomplete collection is flagged even if all
+available plans pass validation. An empty snapshot is not treated as a pass.
+
+Exit codes are `0` for a complete collection with at least one plan and no
+validation errors, `1` for validation failures, no plans, or incomplete
+collection, and `2` for database or snapshot selection errors.
+
+Validation checks SQLite values after storage. SQLite may convert numeric
+types during insertion, so these checks cannot establish the original
+extracted types or accuracy against provider websites. Optional missing
+values remain allowed. Validation is invoked separately and is not integrated
+into the normal collection pipeline.
 
 ### Export Existing Database Data for Power BI
 
