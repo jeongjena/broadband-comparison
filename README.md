@@ -35,7 +35,7 @@ The system collects and standardises broadband plan data, tracks changes between
 
 ## Tech Stack
 
-- Python (Requests, BeautifulSoup, Selenium, webdriver-manager, openpyxl)
+- Python (Requests, BeautifulSoup, Selenium, openpyxl)
 - SQLite
 - Power BI
 
@@ -86,8 +86,7 @@ LLM-assisted extraction and classification were investigated but were not adopte
 - Python 3.x
 - requests
 - beautifulsoup4
-- selenium
-- webdriver-manager
+- selenium (4.11 or newer)
 - openpyxl
 - Microsoft Power BI Desktop
 - Google Chrome
@@ -96,8 +95,11 @@ LLM-assisted extraction and classification were investigated but were not adopte
 ### Install Dependencies
 
 ```bash
-pip install requests beautifulsoup4 selenium webdriver-manager openpyxl
+python -m pip install requests beautifulsoup4 "selenium>=4.11" openpyxl
 ```
+
+Zeronet uses headless Chrome. Selenium Manager handles ChromeDriver automatically;
+`webdriver-manager` is not required. Internet access is needed for driver downloads.
 
 ### Run the Collection Pipeline
 Run from the repository root. The pipeline stores snapshots in
@@ -122,8 +124,17 @@ the Power BI export workbook.
 
 Run from the repository root:
 
-```bash
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
 python -m unittest discover -s tests -v
+```
+
+macOS or Linux:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
 The tests use sample records to check the validation rules in
