@@ -376,6 +376,26 @@ def extract_promo_discount(promotions, base_price):
     return None, None, None
 
 
+def extract_early_termination_fee(entitlements):
+    """Preserve ETF conditions; store only an unambiguous fixed fee as money."""
+    conditions = []
+    amounts = []
+    for entitlement in entitlements or []:
+        text = clean_text(entitlement_text(entitlement))
+        if not re.search(r"\bearly termination fees?\b", text, re.I):
+            continue
+        conditions.append(text)
+        fixed = re.findall(
+            r"early termination fee\s+(?:of\s+|is\s+)?\$\s*(\d+(?:\.\d{1,2})?)\b",
+            text, re.I,
+        )
+        conditional = re.search(r"\b(?:max(?:imum)?|up to|from|depending|if|pro[- ]?rated)\b", text, re.I)
+        amounts.append(clean_money(fixed[0]) if len(fixed) == 1 and not conditional else None)
+    unique = set(amounts)
+    fee = next(iter(unique)) if len(unique) == 1 and None not in unique else None
+    return fee, " | ".join(dict.fromkeys(conditions)) if conditions else None
+
+
 def extract_modem_details(entitlements, promotions=None):
     details = {}
 
@@ -387,7 +407,6 @@ def extract_modem_details(entitlements, promotions=None):
             continue
 
         clean = clean_text(text)
-        modem_condition = clean
 
         if "use your own compatible modem" in lower:
             details["byo_modem_allowed"] = True
@@ -427,16 +446,6 @@ def extract_modem_details(entitlements, promotions=None):
 
         if delivery_match:
             details["shipping_fee"] = clean_money(delivery_match.group(1))
-
-        early_fee_match = re.search(
-            r"early termination fee of\s*\$(\d+(?:\.\d{1,2})?)",
-            text,
-            re.I,
-        )
-
-        if early_fee_match:
-            details["early_termination_fee"] = clean_money(early_fee_match.group(1))
-            details["early_termination_fee_condition_text"] = clean
 
     # Preserve the regular hardware price and retain conditional offers as text.
     for promotion in promotions or []:
@@ -555,6 +564,7 @@ def clean_spark_plans(raw_data):
                 connection_type = infer_connection_type(connection_text)
 
             modem_details = extract_modem_details(entitlements, promotions)
+            early_fee, early_fee_condition = extract_early_termination_fee(entitlements)
             contract_type = extract_contract_type(term.get("name"), entitlements)
             
             cleaned_plan = {
@@ -579,8 +589,8 @@ def clean_spark_plans(raw_data):
                 "modemPurchasePrice": modem_details.get("modem_purchase_price"),
                 "modemPurchaseConditionText": modem_details.get("modem_purchase_condition_text"),
                 "shippingFee": modem_details.get("shipping_fee"),
-                "earlyTerminationFee": modem_details.get("early_termination_fee"),
-                "earlyTerminationFeeConditionText": modem_details.get("early_termination_fee_condition_text"),
+                "earlyTerminationFee": early_fee,
+                "earlyTerminationFeeConditionText": early_fee_condition,
                 "antennaRequired": characteristics.get("antennaRequired"),
                 "speedDown": speed_down,
                 "speedUp": speed_up,
