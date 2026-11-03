@@ -1,12 +1,18 @@
-"""Collect current Zeronet cards, billing-specific terms and signup fees.
+"""
+Zeronet Broadband Web Extractor
 
-Selenium renders the public pages. No separate catalogue API or help-centre
-crawl is used. JSON-LD supplies data allowances only; its fee copy is stale.
+Contributor: Markus Salvador (23203124), Jena Jeong (23208300)
+Version: 0.12
+Last Updated: 2026-11-03
+
+Retrieves broadband plan information from the Zeronet website
+using Selenium and transforms the results into the project's
+standardised format.
 """
 
-from datetime import datetime
 import json
 import re
+from datetime import datetime
 from time import monotonic
 from urllib.parse import urljoin
 
@@ -20,31 +26,55 @@ from processing.standardizer import infer_connection_type, standardize_plans
 
 URL = "https://www.zeronet.co.nz/broadband/"
 TIMEOUT = 30
-CARDS = ".landing-plan-card"
-PERIODS = {"Monthly": {"/mo", "/m", "/month"}, "Weekly": {"/wk", "/w", "/week"}}
+CARD_SELECTOR = ".landing-plan-card"
+
+PERIODS = {
+    "Monthly": {"/mo", "/m", "/month"},
+    "Weekly": {"/wk", "/w", "/week"}
+}
 
 
 def _text(node):
-    return " ".join(node.get_text(" ", strip=True).split()) if node else ""
+    if not node:
+        return ""
+
+    text = node.get_text(" ", strip=True)
+    return " ".join(text.split())
 
 
 def _money(text):
     match = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", text)
-    return float(match[1].replace(",", "")) if match else None
+
+    if not match:
+        return None
+
+    return float(match.group(1).replace(",", ""))
 
 
 def _displayed_price(dollars, cents):
     if not re.fullmatch(r"(?:\d+|\d{1,3}(?:,\d{3})+)", dollars):
         raise ValueError("Zeronet: invalid displayed dollars")
+
     if cents and not re.fullmatch(r"\.?\d{2}", cents):
         raise ValueError("Zeronet: invalid displayed cents")
-    return float(dollars.replace(",", "")) + (int(cents.lstrip(".")) / 100 if cents else 0)
+
+    price = float(dollars.replace(",", ""))
+
+    if cents:
+        price += int(cents.lstrip(".")) / 100
+
+    return price
 
 
 def _unique_plans(plans):
-    keys = [(p["plan_name"], p["connection_type"], p["billing_frequency"]) for p in plans]
+    keys = [
+        (plan["plan_name"], plan["connection_type"], plan["billing_frequency"])
+        for plan in plans
+    ]
+
     if len(keys) != len(set(keys)):
         raise ValueError("Zeronet: duplicate collected plans")
+
     return plans
 
 
@@ -52,92 +82,160 @@ def _rental_details(text):
     """Return availability, amount and unit from the same rental clause."""
     if not text:
         return None, None, None
+
     if re.search(r"^router rental\s+(?:is\s+)?(?:not available|not provided|unavailable)\b", text, re.I):
         return False, None, None
-    number = r"\$\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)"
-    # Accept an immediate rental price or an explicitly labelled cost after a
-    # bond. Do not take the first amount anywhere in the sentence.
+
+    price_pattern = r"\$\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)"
+
+    # Only match rental prices, not unrelated fees or bond amounts.
     prefix = (
         r"^router rental\s*(?:(?:is|costs?|price)\s*:?\s*)?"
         r"|^router rental\s+requires\s+(?:a\s+)?\$[\d,.]+\s+bond\s+and\s+costs?\s+"
     )
-    paid = re.match(r"(?:" + prefix + r")" + number, text, re.I)
-    free = re.match(r"^router rental\s+(?:(?:is\s+)?(?:included\s+)?)free\b", text, re.I)
-    rate = paid or free
-    if rate:
-        tail = text[rate.end():]
-        if paid and re.match(r"\s*(?:bond|deposit|delivery|shipping|set[- ]?up)\b", tail, re.I):
+
+    paid_match = re.match(r"(?:" + prefix + r")" + price_pattern, text, re.I)
+    free_match = re.match(r"^router rental\s+(?:(?:is\s+)?(?:included\s+)?)free\b", text, re.I)
+
+    rental_match = paid_match or free_match
+
+    if rental_match:
+        remaining_text = text[rental_match.end():]
+
+        if paid_match and re.match(r"\s*(?:bond|deposit|delivery|shipping|set[- ]?up)\b", remaining_text, re.I):
             return None, None, None
-        unit = re.match(r"\s*(?:/\s*|per\s+)?(monthly|weekly|months?|weeks?|wk|mo)\b", tail, re.I)
-        frequency = ("Monthly" if unit[1].lower().startswith("mo") else "Weekly") if unit else None
-        price = float(paid[1].replace(",", "")) if paid else 0
+
+        unit_match = re.match(
+            r"\s*(?:/\s*|per\s+)?(monthly|weekly|months?|weeks?|wk|mo)\b",
+            remaining_text,
+            re.I
+        )
+
+        frequency = None
+
+        if unit_match:
+            frequency = "Monthly" if unit_match.group(1).lower().startswith("mo") else "Weekly"
+
+        price = float(paid_match.group(1).replace(",", "")) if paid_match else 0
+
         return True, price, frequency
-    offered = re.match(r"^router rental\s+(?:is\s+)?(?:available|offered|provided|requires)\b", text, re.I)
-    return (True if offered else None), None, None
+
+    offered_match = re.match(
+        r"^router rental\s+(?:is\s+)?(?:available|offered|provided|requires)\b",
+        text,
+        re.I
+    )
+
+    return (True if offered_match else None), None, None
 
 
 def _structured_products(soup):
     """Read product nodes from JSON-LD without executing scripts."""
+
     def walk(node):
         if isinstance(node, list):
             for child in node:
                 yield from walk(child)
+
         elif isinstance(node, dict):
-            types = node.get("@type", [])
-            if types == "Product" or isinstance(types, list) and "Product" in types:
+            product_types = node.get("@type", [])
+
+            is_product = (
+                product_types == "Product"
+                or isinstance(product_types, list) and "Product" in product_types
+            )
+
+            if is_product:
                 yield node
+
             for key in ("@graph", "hasVariant"):
                 yield from walk(node.get(key))
 
-    result = []
+    products = []
+
     for script in soup.select('script[type="application/ld+json"]'):
         try:
-            result.extend(walk(json.loads(script.get_text())))
+            data = json.loads(script.get_text())
+            products.extend(walk(data))
+
         except (ValueError, TypeError):
             continue
-    return result
+
+    return products
 
 
 def _wait_view(driver, frequency):
-    # Vue updates cards and offer conditions separately. Require the rendered
-    # content to settle before saving a view, rather than relying on sleep().
-    previous, changed_at = None, monotonic()
+    """Wait until the selected billing view finishes updating."""
 
-    def ready(browser):
-        nonlocal previous, changed_at
-        checkboxes = browser.find_elements(By.CSS_SELECTOR, '.landing-control-tray__bundle input[type="checkbox"]')
-        if any(c.is_selected() for c in checkboxes):
-            previous, changed_at = None, monotonic()
+    previous_content = None
+    last_changed_at = monotonic()
+
+    def view_is_ready(browser):
+        nonlocal previous_content, last_changed_at
+
+        # Check that mobile bundle pricing is disabled.
+        bundle_checkboxes = browser.find_elements(
+            By.CSS_SELECTOR,
+            '.landing-control-tray__bundle input[type="checkbox"]'
+        )
+
+        if any(checkbox.is_selected() for checkbox in bundle_checkboxes):
+            previous_content, last_changed_at = None, monotonic()
             return False
-        radios = browser.find_elements(By.CSS_SELECTOR, f'input[type="radio"][value="{frequency.lower()}"]')
-        if not any(r.is_selected() for r in radios):
-            previous, changed_at = None, monotonic()
+
+        # Check that the correct billing frequency is selected.
+        billing_radios = browser.find_elements(
+            By.CSS_SELECTOR,
+            f'input[type="radio"][value="{frequency.lower()}"]'
+        )
+
+        if not any(radio.is_selected() for radio in billing_radios):
+            previous_content, last_changed_at = None, monotonic()
             return False
-        cards = browser.find_elements(By.CSS_SELECTOR, CARDS)
+
+        # Check that all plan cards display the correct billing period.
+        cards = browser.find_elements(By.CSS_SELECTOR, CARD_SELECTOR)
+
         if not cards or not all(
-            c.find_element(By.CSS_SELECTOR, '[class$="__price-period"]').text.strip() in PERIODS[frequency]
-            for c in cards
+            card.find_element(
+                By.CSS_SELECTOR, '[class$="__price-period"]'
+            ).text.strip() in PERIODS[frequency]
+            for card in cards
         ):
-            previous, changed_at = None, monotonic()
+            previous_content, last_changed_at = None, monotonic()
             return False
-        content = browser.execute_script(
+
+        # Wait for the displayed content to remain unchanged for one second.
+        current_content = browser.execute_script(
             "return [...document.querySelectorAll(arguments[0])]"
             ".map(e => e.textContent).join('\\n')",
-            CARDS + ", details, .landing-control-tray__facts",
+            CARD_SELECTOR + ", details, .landing-control-tray__facts"
         )
-        if content != previous:
-            previous, changed_at = content, monotonic()
-        return monotonic() - changed_at >= 1
 
-    WebDriverWait(driver, TIMEOUT, ignored_exceptions=(StaleElementReferenceException, NoSuchElementException)).until(ready)
+        if current_content != previous_content:
+            previous_content = current_content
+            last_changed_at = monotonic()
+
+        return monotonic() - last_changed_at >= 1
+
+    WebDriverWait(
+        driver,
+        TIMEOUT,
+        ignored_exceptions=(StaleElementReferenceException, NoSuchElementException)
+    ).until(view_is_ready)
 
 
 def _contract(text):
-    months = set(re.findall(r"\b(\d+)[- ]months? term\b", text, re.I))
-    open_term = bool(re.search(r"no (?:minimum )?term|no lock-in", text, re.I))
-    if len(months) == 1 and not open_term:
-        return "fixed", int(next(iter(months)))
-    return ("open", None) if open_term and not months else (None, None)
+    fixed_terms = set(re.findall(r"\b(\d+)[- ]months? term\b", text, re.I))
+    has_open_term = bool(re.search(r"no (?:minimum )?term|no lock-in", text, re.I))
+
+    if len(fixed_terms) == 1 and not has_open_term:
+        return "fixed", int(next(iter(fixed_terms)))
+
+    if has_open_term and not fixed_terms:
+        return "open", None
+
+    return None, None
 
 
 def _setup_fee(text):
