@@ -2,8 +2,8 @@
 Contact Broadband API Extractor
 
 Contributor: Markus Salvador (23203124)
-Version: 0.5
-Last Updated: 2026-09-12
+Version: 0.6
+Last Updated: 2026-11-6
 
 Retrieves broadband plan information from the Contact API and
 transforms the results into the project's standardised format.
@@ -56,6 +56,7 @@ def fetch_contact_plans():
     })
 
     payload = {
+        "journeyType": "Join",
         "userType": "CUSTOMER",
         "plans": plan_ids,
         "services": service_ids,
@@ -68,7 +69,7 @@ def fetch_contact_plans():
     }
 
     r2 = session.post(FINAL_URL, headers=headers, json=payload)
-    r2.raise_for_status()   
+    r2.raise_for_status()
     result = r2.json()
 
     if isinstance(result, dict):
@@ -117,7 +118,7 @@ def clean_contact_plans(plans):
     These numbers are copied from the marketing page:
     "Save $5 a month on broadband bundled with electricity or $10 when you 
     bundle electricity and gas on the Broadband Bundle Plan."
-    https://contact.co.nz/personal/broadband - checked on 12th Sept 2026
+    https://contact.co.nz/personal/broadband - checked on 6th Nov 2026
 
     If contact changes this deal, we wont know unless someone manually 
     checks the page again.
